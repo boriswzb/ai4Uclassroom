@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a56db;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#3b82f6;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="dotGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f59e0b;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#fbbf24;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- 圆角矩形背景 -->
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#bgGrad)"/>
+
+  <!-- 书本 -->
+  <g transform="translate(64, 72)">
+    <!-- 左页 -->
+    <path d="M0 0 Q0 -36 -32 -36 L-32 10 Q0 14 0 0Z" fill="white" opacity="0.9"/>
+    <!-- 右页 -->
+    <path d="M0 0 Q0 -36 32 -36 L32 10 Q0 14 0 0Z" fill="white" opacity="0.75"/>
+    <!-- 书脊 -->
+    <line x1="0" y1="-36" x2="0" y2="10" stroke="white" stroke-width="1.5" opacity="0.4"/>
+  </g>
+
+  <!-- AI 网络节点 -->
+  <!-- 中心节点 - 琥珀色 -->
+  <circle cx="64" cy="32" r="8" fill="url(#dotGrad)"/>
+  <!-- 左节点 -->
+  <circle cx="36" cy="48" r="5.5" fill="white" opacity="0.85"/>
+  <!-- 右节点 -->
+  <circle cx="92" cy="48" r="5.5" fill="white" opacity="0.85"/>
+  <!-- 连接线 -->
+  <line x1="64" y1="32" x2="36" y2="48" stroke="white" stroke-width="2" opacity="0.5"/>
+  <line x1="64" y1="32" x2="92" y2="48" stroke="white" stroke-width="2" opacity="0.5"/>
+  <line x1="36" y1="48" x2="92" y2="48" stroke="white" stroke-width="2" opacity="0.3"/>
+
+  <!-- AI4U 文字 -->
+  <text x="64" y="112" font-family="'Inter', 'Source Sans Pro', system-ui, sans-serif" font-size="20" font-weight="700" fill="white" text-anchor="middle" letter-spacing="1">
+    AI4U
+  </text>
+</svg>
