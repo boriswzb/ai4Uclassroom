@@ -684,8 +684,8 @@ function HomePage() {
             <span className="text-sm font-semibold text-muted-foreground">AI4U Classroom</span>
           </div>
           <div className="text-xs text-muted-foreground text-center leading-relaxed">
-            <p>本网站基于开源项目构建，用于学习交流，不做商业运营</p>
-            <p>ICP备案申请中...</p>
+            <p>{t('footer.disclaimer')}</p>
+            <p>{t('footer.icp')}</p>
           </div>
         </div>
       </footer>

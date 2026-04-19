@@ -9,6 +9,10 @@
     "slogan": "マルチエージェント対話型教室で生成的に学ぶ",
     "greetingWithName": "こんにちは、{{name}}さん"
   },
+  "footer": {
+    "disclaimer": "本サイトはオープンソースプロジェクトに基づいて構築され、学習交流のために使用され、商業運営は行いません",
+    "icp": "蜀ICP备2026018687"
+  },
   "toolbar": {
     "pdfParser": "パーサー",
     "pdfUpload": "PDFをアップロード",

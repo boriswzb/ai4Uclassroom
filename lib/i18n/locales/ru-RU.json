@@ -9,6 +9,10 @@
     "slogan": "Generative Learning in Multi-Agent Interactive Classroom",
     "greetingWithName": "Привет, {{name}}"
   },
+  "footer": {
+    "disclaimer": "Сайт создан на базе проектов с открытым исходным кодом для обучения и обмена знаниями, не для коммерческого использования",
+    "icp": "蜀ICP备2026018687"
+  },
   "toolbar": {
     "pdfParser": "Парсер",
     "pdfUpload": "Загрузить PDF",

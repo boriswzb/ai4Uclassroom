@@ -9,6 +9,10 @@
     "slogan": "Learn Anything with AI — Your Interactive Multi-Agent Classroom",
     "greetingWithName": "Hi, {{name}}"
   },
+  "footer": {
+    "disclaimer": "Built on open-source projects for learning and communication, not for commercial use",
+    "icp": "蜀ICP备2026018687"
+  },
   "toolbar": {
     "pdfParser": "Parser",
     "pdfUpload": "Upload PDF",

@@ -9,6 +9,10 @@
     "slogan": "AI 多智能体互动课堂，开启你的生成式学习之旅",
     "greetingWithName": "嗨，{{name}}"
   },
+  "footer": {
+    "disclaimer": "本网站基于开源项目构建，用于学习交流，不做商业运营",
+    "icp": "蜀ICP备2026018687"
+  },
   "toolbar": {
     "pdfParser": "解析器",
     "pdfUpload": "上传 PDF",
