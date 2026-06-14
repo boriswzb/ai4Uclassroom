@@ -499,6 +499,74 @@ If you find OpenMAIC useful in your research, please consider citing:
 
 ---
 
+## 📈 量化交易子系统（Quant Trading Subsystem）
+
+> 本 fork（boris/ai4uclassroom）在原 OpenMAIC 基础上增加了完整的 A 股量化交易模块，位于 `/quant` 路径下。
+
+### 核心功能
+
+- **多因子模型（v2）**：8 大类因子（估值/质量/动量/反转/资金流/技术面/换手率/WQ Alpha）+ 行业中性化 + 共线性控制 + IC 动态定权
+- **因子研究页**：`/quant/factor-analysis-v2` — IC/IR 验证、手动权重调优、8 大类对比
+- **个股回测**：`/quant/pro#backtest` — 12 策略单股历史回测（含 21 个回测统计指标）
+- **组合回测**：`/quant/pro#factor-portfolio` — 多因子组合、调仓、归因
+- **模拟交易**：`/quant/pro#simulator` — T+1 模拟账户、Zustand + IndexedDB 持久化、自动驾驶
+- **智能选股**：`/quant#screener` — 8 模板 + 30+ 维度自定义筛选
+- **AI 诊断**：`/quant#ai` — LLM 解读当日市场 + 推荐股
+
+### 技术栈
+
+- **前端**：Next.js 16 (App Router) + React 19 + TypeScript 5 + Tailwind 4
+- **状态**：Zustand（账号/策略/盯盘/模拟器/选股持久化）
+- **本地存储**：Dexie (IndexedDB) + 双层持久化（浏览器 IDB + 服务器 JSON 文件备份）
+- **数据源**：东方财富 / 新浪 / 腾讯（三源自动 fallback）
+- **回测引擎**：EnhancedBacktestEngine（事件驱动 + 多股票组合）
+- **实时计算**：客户端 Worker + 定时轮询（5 秒）
+
+### 量化代码结构
+
+```
+app/quant/                  # 页面（速览模式 / 专业模式 / 因子研究）
+  page.tsx                  # 速览模式（一站式无跳转完整体验）
+  pro/page.tsx              # 专业模式（hash 路由 9 个 tab）
+  factor-analysis-v2/       # 因子研究 v2
+app/api/stock/              # API 路由
+  factor-analysis-v2/       # 多因子分析
+  screener/                 # 选股引擎
+  backtest-v1-vs-v2/        # v1 vs v2 模型对比回测
+  realtime/                 # 实时行情
+  kline/                    # K 线（日/周/月/分时）
+components/quant/           # 16 个 UI 组件
+  stock-table.tsx           # 个股排行（速览+专业共享）
+  backtest-panel.tsx        # 回测面板
+  screener-panel.tsx        # 选股面板
+  simulator-panel.tsx       # 模拟交易面板
+  score-detail-modal/...    # 综合分详情弹窗（含反事实 / IC 趋势 / 报告导出）
+  ...
+lib/quant/                  # 业务库（58 个文件）
+  factor/v2/                # v2 因子引擎（scorer / weights / percentile / alphas）
+  backtest/                 # 回测引擎 + factor-portfolio 组合管理
+  strategies/               # 12 个交易策略（动量/均值回归/突破/海龟等）
+  risk/                     # 风控（position-sizer / risk-engine / position-manager）
+  data/                     # 三级缓存（localStorage → IndexedDB → API）
+  store/                    # Zustand stores（6 个）
+  simulator/                # live-simulator（Node 端内存单例）
+  hooks/                    # React hooks
+  market/                   # 市场状态判断（开/休/午休）
+  types/                    # 共享类型
+```
+
+### 部署
+
+参见 [`DEPLOY.md`](DEPLOY.md)。
+
+### 注意事项
+
+- **v1 旧因子模型（3-pillar）已废弃**：v1 endpoint (`/api/stock/factor-analysis`) 和 v1 页面 (`/quant/factor-analysis`) 已删除。所有路径统一使用 v2。`computeV1Pillars()` 仅作为「历史策略基线」保留在 `lib/quant/factor/v2/scorer.ts:199`，仅供 v1-vs-v2 回测（`/api/stock/backtest-v1-vs-v2`）和对比报告（`v2/compare.ts`）使用，不要新建调用入口。
+- **模拟交易数据**：用户的持仓/订单/成交记录默认存于 `/data/simulator-state/<userId>.json`（服务器侧），并通过 IndexedDB 镜像到浏览器。`.gitignore` 已排除该目录。
+- **数据源稳定性**：东方财富 / 新浪接口在服务器端常被防火墙阻断，量化系统已实现三源自动 fallback（详见 `lib/quant/data/data-source.ts`）。
+
+---
+
 ## 📄 License
 
 This project is licensed under the [GNU Affero General Public License v3.0](LICENSE).

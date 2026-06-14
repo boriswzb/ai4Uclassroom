@@ -72,3 +72,21 @@ next-env.d.ts
 # docs
 /docs
 tests/generation/*.eval.result.md
+
+/lib/generated/prisma
+
+# 模拟交易状态（用户交易流水和持仓，敏感数据不提交）
+/data/simulator-state/
+/data/simulator-state/*.json
+!/data/simulator-state/.gitkeep
+
+# Android 构建产物（Capacitor 同步生成，本地构建即可）
+/android-app/
+/android/
+
+# 大型资源文件（PPT、APK 等本地开发产物）
+*.apk
+*.pptx
+*.ppt
+*.key
+*.pem

@@ -1,0 +1,80 @@
+/* 统计卡片网格 */
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.statCard {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  padding: 20px;
+  transition: all 0.3s;
+  position: relative;
+  overflow: hidden;
+}
+
+.statCard::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.statCard[data-color="revenue"]::before { background: linear-gradient(90deg, #34d399, #10b981); }
+.statCard[data-color="orders"]::before { background: linear-gradient(90deg, #60a5fa, #3b82f6); }
+.statCard[data-color="alerts"]::before { background: linear-gradient(90deg, #f87171, #ef4444); }
+.statCard[data-color="invoices"]::before { background: linear-gradient(90deg, #fbbf24, #f59e0b); }
+.statCard[data-color="receivables"]::before { background: linear-gradient(90deg, #a78bfa, #8b5cf6); }
+.statCard[data-color="payables"]::before { background: linear-gradient(90deg, #f472b6, #ec4899); }
+
+.statCard:hover::before { opacity: 1; }
+.statCard:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+  transform: translateY(-2px);
+}
+
+.statLabel {
+  font-size: 12px;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+
+.statValue {
+  font-size: 26px;
+  font-weight: 700;
+  color: #f1f5f9;
+  margin-bottom: 6px;
+}
+
+.statChange {
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.statChange.up { color: #34d399; }
+.statChange.down { color: #f87171; }
+.statChange.neutral { color: #94a3b8; }
+
+.vsText {
+  color: #475569;
+  margin-left: 4px;
+  font-size: 11px;
+}
+
+@media (max-width: 1400px) {
+  .statsGrid { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 768px) {
+  .statsGrid { grid-template-columns: repeat(2, 1fr); }
+}

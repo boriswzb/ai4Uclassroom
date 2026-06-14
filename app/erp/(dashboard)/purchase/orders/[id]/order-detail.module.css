@@ -1,0 +1,244 @@
+.header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.backBtn {
+  padding: 8px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: #94a3b8;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.backBtn:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: #e2e8f0;
+}
+
+.headerInfo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #f1f5f9;
+  margin: 0;
+}
+
+.badge {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.badge[data-status="DRAFT"] {
+  background: rgba(148, 163, 184, 0.12);
+  color: #94a3b8;
+}
+
+.badge[data-status="CONFIRMED"] {
+  background: rgba(96, 165, 250, 0.12);
+  color: #60a5fa;
+}
+
+.badge[data-status="ORDERED"] {
+  background: rgba(251, 191, 36, 0.12);
+  color: #fbbf24;
+}
+
+.badge[data-status="RECEIVED"] {
+  background: rgba(52, 211, 153, 0.12);
+  color: #34d399;
+}
+
+.badge[data-status="CANCELLED"] {
+  background: rgba(248, 113, 113, 0.12);
+  color: #f87171;
+}
+
+.container {
+  padding: 24px;
+  max-width: 900px;
+}
+
+.section {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.sectionTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin: 0 0 16px 0;
+}
+
+.infoGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.infoItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.infoLabel {
+  font-size: 11px;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.infoValue {
+  font-size: 13px;
+  color: #e2e8f0;
+}
+
+/* 商品明细 */
+.itemsTable {
+  display: flex;
+  flex-direction: column;
+}
+
+.itemsHeader {
+  display: grid;
+  grid-template-columns: 2fr 80px 120px 120px;
+  gap: 10px;
+  padding: 8px 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.itemRow {
+  display: grid;
+  grid-template-columns: 2fr 80px 120px 120px;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  font-size: 13px;
+  color: #cbd5e1;
+}
+
+.itemRow:last-child {
+  border-bottom: none;
+}
+
+.colProduct { font-weight: 500; color: #e2e8f0; }
+.colQty { text-align: center; }
+.colPrice { text-align: right; }
+.colSubtotal { text-align: right; font-weight: 600; color: #e2e8f0; }
+
+/* 金额汇总 */
+.amountSummary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 280px;
+  margin-left: auto;
+}
+
+.amountRow {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: #94a3b8;
+}
+
+.totalRow {
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.totalAmount {
+  font-size: 18px;
+  color: #f1f5f9;
+}
+
+/* 备注 */
+.remark {
+  font-size: 13px;
+  color: #94a3b8;
+  margin: 0;
+  line-height: 1.6;
+}
+
+/* 操作按钮 */
+.actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 10px;
+}
+
+.backLink {
+  padding: 10px 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: #94a3b8;
+  font-size: 13px;
+  text-decoration: none;
+  transition: all 0.2s;
+}
+
+.backLink:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: #e2e8f0;
+}
+
+.actionBtns {
+  display: flex;
+  gap: 8px;
+}
+
+.editBtn, .deleteBtn {
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.editBtn {
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  color: #a5b4fc;
+}
+
+.editBtn:hover {
+  background: rgba(99, 102, 241, 0.2);
+}
+
+.deleteBtn {
+  background: rgba(248, 113, 113, 0.08);
+  border: 1px solid rgba(248, 113, 113, 0.15);
+  color: #f87171;
+}
+
+.deleteBtn:hover {
+  background: rgba(248, 113, 113, 0.15);
+}

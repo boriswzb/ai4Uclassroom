@@ -1,0 +1,17 @@
+invite-users:
+  - username: boriswzb
+    code: f123456
+    apiKey: sk-test12345678
+    baseUrl: https://api.siliconflow.cn/v1
+    note: 测试用户
+    createdAt: '2026-04-19T15:38:45.584Z'
+  - username: me
+    code: '5315'
+    apiKey: sk-enqirowlmbyieeplzdvgqowjdmgfswnzvrxnzphrgzyxdqzx
+    baseUrl: https://api.siliconflow.cn/v1
+    createdAt: '2026-04-19T15:48:20.488Z'
+  - username: boris
+    code: '712296'
+    apiKey: sk-enqirowlmbyieeplzdvgqowjdmgfswnzvrxnzphrgzyxdqzx
+    baseUrl: https://api.siliconflow.cn/v1
+    createdAt: '2026-04-19T17:11:32.853Z'

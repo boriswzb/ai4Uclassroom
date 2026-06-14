@@ -329,3 +329,29 @@ export interface MediaTaskAdapter<TOptions, TResult> {
    */
   pollTaskStatus(taskId: string): Promise<TResult | null>;
 }
+
+// ─── Media Gallery Types ───────────────────────────────────────────────────
+export interface MediaItem {
+  id: string;
+  title: string;
+  description: string;
+  type: 'music' | 'cover' | 'image' | 'video';
+  format: string;
+  thumbnail: string;
+  mediaUrl: string;
+  author: string;
+  tags: string[];
+  createdAt: string;
+  plays: number;
+  likes: number;
+  category: 'ai-music' | 'ai-cover' | 'ai-image' | 'ai-video';
+  voiceSource?: string;
+  prompt?: string;
+  duration?: number;
+  size: number;
+}
+
+export interface MediaListResponse {
+  items: MediaItem[];
+  total: number;
+}

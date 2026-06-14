@@ -1,0 +1,146 @@
+.container {
+  padding: 0;
+  min-height: 100vh;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 32px;
+  border-bottom: 1px solid #1e293b;
+}
+
+.topbarLeft { display: flex; align-items: baseline; gap: 12px; }
+.title { font-size: 22px; font-weight: 700; color: #f8fafc; margin: 0; }
+.subtitle { font-size: 13px; color: #64748b; }
+
+.periodTabs { display: flex; gap: 4px; }
+.periodTab {
+  padding: 6px 16px;
+  border: 1px solid #334155;
+  background: transparent;
+  color: #94a3b8;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.15s;
+}
+.periodTab:hover { border-color: #475569; color: #e2e8f0; }
+.periodTab.active { background: #2563eb; border-color: #2563eb; color: #fff; }
+
+/* KPI Grid */
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 16px;
+  padding: 24px 32px;
+}
+
+.kpiCard {
+  background: #1e293b;
+  border-radius: 10px;
+  padding: 16px;
+  border: 1px solid #334155;
+}
+
+.kpiTop { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.kpiIcon { font-size: 18px; }
+.kpiChange { font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 4px; }
+.positive { background: rgba(34,197,94,0.15); color: #4ade80; }
+.negative { background: rgba(239,68,68,0.15); color: #f87171; }
+.kpiValue { font-size: 20px; font-weight: 700; color: #f8fafc; font-family: monospace; margin-bottom: 4px; }
+.kpiLabel { font-size: 12px; color: #64748b; }
+
+/* Charts Row */
+.chartsRow {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr;
+  gap: 16px;
+  padding: 0 32px 16px;
+}
+
+.chartCard {
+  background: #1e293b;
+  border-radius: 10px;
+  padding: 20px;
+  border: 1px solid #334155;
+}
+
+.chartTitle { font-size: 14px; font-weight: 600; color: #cbd5e1; margin: 0 0 16px 0; }
+
+/* Bar Chart */
+.barChart { display: flex; align-items: flex-end; gap: 8px; height: 160px; }
+.barItem { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; height: 100%; }
+.barWrapper { flex: 1; width: 100%; display: flex; align-items: flex-end; }
+.bar { width: 100%; background: linear-gradient(to top, #2563eb, #3b82f6); border-radius: 4px 4px 0 0; min-height: 8px; transition: height 0.5s ease; }
+.barLabel { font-size: 11px; color: #64748b; }
+.barValue { font-size: 10px; color: #94a3b8; font-family: monospace; }
+
+/* Pie Chart */
+.pieChart { display: flex; align-items: center; gap: 24px; }
+.pieCircle {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  background: conic-gradient(#2563eb 0% 42%, #7c3aed 42% 70%, #0891b2 70% 88%, #15803d 88% 100%);
+  position: relative;
+  flex-shrink: 0;
+}
+.pieCenter { position: absolute; inset: 20px; background: #1e293b; border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.pieCenterValue { font-size: 13px; font-weight: 700; color: #f8fafc; font-family: monospace; }
+.pieCenterLabel { font-size: 10px; color: #64748b; }
+.pieLegend { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+.legendItem { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.legendDot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.legendLabel { color: #cbd5e1; flex: 1; }
+.legendValue { color: #94a3b8; font-family: monospace; }
+
+/* Status Distribution */
+.statusList { display: flex; flex-direction: column; gap: 12px; }
+.statusItem { display: flex; flex-direction: column; gap: 6px; }
+.statusLeft { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.statusDot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.statusLabel { color: #cbd5e1; flex: 1; }
+.statusCount { color: #64748b; font-size: 12px; }
+.statusBar { height: 6px; background: #334155; border-radius: 3px; overflow: hidden; }
+.statusBarFill { height: 100%; border-radius: 3px; }
+
+/* Bottom Row */
+.bottomRow {
+  display: grid;
+  grid-template-columns: 1.5fr 1.5fr 1fr;
+  gap: 16px;
+  padding: 0 32px 24px;
+}
+
+.tableCard {
+  background: #1e293b;
+  border-radius: 10px;
+  padding: 20px;
+  border: 1px solid #334155;
+}
+
+.miniTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+.miniTable th { padding: 8px; text-align: left; font-weight: 500; color: #64748b; border-bottom: 1px solid #334155; white-space: nowrap; }
+.miniTable td { padding: 8px; border-bottom: 1px solid #1e293b; color: #cbd5e1; }
+.miniTable tr:hover td { background: rgba(255,255,255,0.02); }
+.orderNo { font-family: monospace; color: #60a5fa; }
+.amount { font-family: monospace; font-weight: 600; }
+.rank { font-weight: 700; color: #f59e0b; text-align: center; }
+.productName { font-size: 11px; max-width: 140px; }
+.statusBadge { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 10px; font-weight: 500; }
+.statusBadge[data-status="已收货"] { background: rgba(34,197,94,0.15); color: #4ade80; }
+.statusBadge[data-status="已确认"] { background: rgba(37,99,235,0.15); color: #60a5fa; }
+.statusBadge[data-status="已发货"] { background: rgba(194,65,12,0.15); color: #fb923c; }
+.statusBadge[data-status="草稿"] { background: rgba(100,116,139,0.15); color: #94a3b8; }
+
+/* Alerts */
+.alertCard { background: #1e293b; border-radius: 10px; padding: 20px; border: 1px solid #334155; }
+.alerts { display: flex; flex-direction: column; gap: 10px; }
+.alertItem { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; font-size: 12px; }
+.alertItem.danger { background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.2); color: #f87171; }
+.alertItem.warning { background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.2); color: #fbbf24; }
+.alertItem.info { background: rgba(37,99,235,0.1); border: 1px solid rgba(37,99,235,0.2); color: #60a5fa; }

@@ -19,6 +19,7 @@ import {
   BotOff,
   ChevronUp,
   Upload,
+  UserCheck,
 } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { LanguageSwitcher } from '@/components/language-switcher';
@@ -29,6 +30,7 @@ import { cn } from '@/lib/utils';
 import { SettingsDialog } from '@/components/settings';
 import { GenerationToolbar } from '@/components/generation/generation-toolbar';
 import { AgentBar } from '@/components/agent/agent-bar';
+import { InviteLoginButton } from '@/components/invite-login-button';
 import { useTheme } from '@/lib/hooks/use-theme';
 import { nanoid } from 'nanoid';
 import { storePdfBlob } from '@/lib/utils/image-storage';
@@ -437,6 +439,11 @@ function HomePage() {
                 </div>
               )}
             </div>
+
+            <div className="w-[1px] h-4 bg-border/60" />
+
+            {/* Invite Login Button */}
+            <InviteLoginButton />
 
             <div className="w-[1px] h-4 bg-border/60" />
 

@@ -889,7 +889,7 @@ export const useSettingsStore = create<SettingsState>()(
             const res = await fetch('/api/server-providers');
             if (!res.ok) return;
             const data = (await res.json()) as {
-              providers: Record<string, { models?: string[]; baseUrl?: string }>;
+              providers: Record<string, { models?: string[]; baseUrl?: string; apiKey?: string }>;
               tts: Record<string, { baseUrl?: string }>;
               asr: Record<string, { baseUrl?: string }>;
               pdf: Record<string, { baseUrl?: string }>;
@@ -928,6 +928,9 @@ export const useSettingsStore = create<SettingsState>()(
                     serverModels: info.models,
                     serverBaseUrl: info.baseUrl,
                     models: filteredModels,
+                    // Store server apiKey if provided and current is empty
+                    apiKey: (info.apiKey && !newProvidersConfig[key].apiKey) ? info.apiKey : newProvidersConfig[key].apiKey,
+                    baseUrl: info.baseUrl || newProvidersConfig[key].baseUrl,
                   };
                 }
               }
@@ -1239,10 +1242,16 @@ export const useSettingsStore = create<SettingsState>()(
                 }
               }
 
-              // LLM auto-select: only on true first load (no provider selected yet)
+              // LLM auto-select: select a server-configured provider whenever:
+              // 1. First load ever (providerId is empty), OR
+              // 2. Current provider is not server-configured but server has one
+              //    (handles invited users who previously used a different provider)
               let autoProviderId: ProviderId | undefined;
               let autoModelId: string | undefined;
-              if (!state.providerId && !state.modelId) {
+              const currentProviderConfig = newProvidersConfig[state.providerId as ProviderId];
+              const needsLlmautoSelect =
+                !state.providerId || !currentProviderConfig?.isServerConfigured;
+              if (needsLlmautoSelect) {
                 for (const [pid, cfg] of Object.entries(newProvidersConfig)) {
                   if (cfg.isServerConfigured) {
                     // Prefer server-restricted models, fall back to built-in list

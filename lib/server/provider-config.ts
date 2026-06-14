@@ -245,7 +245,7 @@ function getConfig(): ServerConfig {
 // Public API — LLM
 // ---------------------------------------------------------------------------
 
-/** Returns server-configured LLM providers (no apiKeys) */
+/** Returns server-configured LLM provider metadata (apiKey NEVER exposed) */
 export function getServerProviders(): Record<string, { models?: string[]; baseUrl?: string }> {
   const cfg = getConfig();
   const result: Record<string, { models?: string[]; baseUrl?: string }> = {};

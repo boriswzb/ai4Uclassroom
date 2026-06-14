@@ -1,0 +1,23 @@
+# =============================================================================
+# Invite Codes Configuration
+# Define invite codes for invited users who get pre-configured model API access.
+# Guests can still use the site without an invite code (they set up their own API).
+#
+# Format:
+#   code: the invite code string
+#   username: display name for the user (optional, can be overridden at login)
+#   note: admin note for tracking (optional)
+# =============================================================================
+#
+# Example:
+# invite-codes:
+#   - code: "CLASS2026"
+#     username: ""
+#     note: "2026春季班学员"
+#   - code: "TEACHER01"
+#     username: ""
+#     note: "教师专用码"
+#
+invite-codes:
+  - code: "TEST2026"
+    note: "测试用邀请码"

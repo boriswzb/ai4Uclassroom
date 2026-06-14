@@ -1,0 +1,267 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ============ CRM ============
+model Contact {
+  id          String   @id @default(cuid())
+  name        String
+  email       String?
+  phone       String?
+  isCustomer  Boolean  @default(false)
+  isSupplier  Boolean  @default(false)
+  tags        String?  // JSON array as string
+  receivable  Float    @default(0)
+  payable     Float    @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id])
+  deals     Deal[]
+}
+
+model Company {
+  id          String    @id @default(cuid())
+  name        String
+  industry    String?
+  contact     String?
+  email       String?
+  phone       String?
+  city        String?
+  type        String    @default("customer") // customer, supplier, both
+  revenue     Float     @default(0)
+  employees   Int       @default(0)
+  tags        String?   // JSON array as string
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  contacts Contact[]
+  deals    Deal[]
+  invoices Invoice[]
+  payments Payment[]
+}
+
+model Deal {
+  id              String   @id @default(cuid())
+  name            String
+  amount          Float
+  stage           String   @default("qualification") // qualification, proposal, negotiation, contract
+  probability     Int      @default(0)
+  source          String?
+  expectedClose   String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id])
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id])
+}
+
+// ============ 销售 ============
+model SalesOrder {
+  id          String   @id @default(cuid())
+  orderNo     String   @unique
+  customerId  String
+  contact     String?
+  date        String
+  amount      Float
+  status      String   @default("draft") // draft, confirmed, shipped, completed, cancelled
+  payment     String   @default("unpaid") // unpaid, partial, paid
+  remark      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  items       SalesOrderItem[]
+}
+
+model SalesOrderItem {
+  id            String      @id @default(cuid())
+  orderId       String
+  productId     String
+  productName   String
+  quantity      Int
+  unit          String
+  price         Float
+  subtotal      Float
+  createdAt     DateTime    @default(now())
+
+  order         SalesOrder  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product       Product     @relation(fields: [productId], references: [id])
+}
+
+// ============ 采购 ============
+model PurchaseOrder {
+  id          String   @id @default(cuid())
+  orderNo     String   @unique
+  vendorId    String
+  contact     String?
+  date        String
+  amount      Float
+  status      String   @default("draft")
+  payment     String   @default("unpaid")
+  remark      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  items       PurchaseOrderItem[]
+}
+
+model PurchaseOrderItem {
+  id            String        @id @default(cuid())
+  orderId       String
+  productId     String
+  productName   String
+  quantity      Int
+  unit          String
+  price         Float
+  subtotal      Float
+  createdAt     DateTime      @default(now())
+
+  order         PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product       Product       @relation(fields: [productId], references: [id])
+}
+
+model Vendor {
+  id          String   @id @default(cuid())
+  name        String
+  category    String?
+  contact     String?
+  email       String?
+  phone       String?
+  address     String?
+  payable     Float    @default(0)
+  rating      Int      @default(3)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ============ 库存 ============
+model Product {
+  id              String   @id @default(cuid())
+  code            String   @unique
+  name            String
+  category        String?
+  unit            String   @default("个")
+  cost            Float    @default(0)
+  price           Float    @default(0)
+  reorderPoint    Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  warehouseId     String?
+  warehouse       Warehouse? @relation(fields: [warehouseId], references: [id])
+  inventoryItems  InventoryItem[]
+  salesItems      SalesOrderItem[]
+  purchaseItems   PurchaseOrderItem[]
+  inventoryMoves  InventoryMove[]
+}
+
+model Warehouse {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  location    String?
+  manager     String?
+  capacity    Int      @default(0)
+  used        Int      @default(0)
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  products    Product[]
+  inventoryItems InventoryItem[]
+  moves       InventoryMove[]
+}
+
+model InventoryItem {
+  id          String   @id @default(cuid())
+  productId   String
+  warehouseId String
+  quantity    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  product     Product   @relation(fields: [productId], references: [id])
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+
+  @@unique([productId, warehouseId])
+}
+
+model InventoryMove {
+  id          String   @id @default(cuid())
+  moveNo      String   @unique
+  type        String   // in, out, transfer
+  productId   String
+  quantity    Int
+  warehouseId String
+  operator    String?
+  date        String
+  status      String   @default("completed")
+  remark      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  product     Product   @relation(fields: [productId], references: [id])
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+}
+
+// ============ 财务 ============
+model Invoice {
+  id          String   @id @default(cuid())
+  invoiceNo   String   @unique
+  companyId   String
+  type        String   @default("sales") // sales, purchase
+  amount      Float
+  taxAmount   Float    @default(0)
+  totalAmount Float
+  status      String   @default("draft") // draft, issued, paid, overdue, void
+  issueDate   String
+  dueDate     String
+  paidDate    String?
+  remark      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company     Company  @relation(fields: [companyId], references: [id])
+}
+
+model Payment {
+  id          String   @id @default(cuid())
+  paymentNo   String   @unique
+  type        String   // receivable, payable
+  companyId   String
+  amount      Float
+  relatedDoc  String?
+  date        String
+  method      String   @default("银行转账")
+  status      String   @default("pending")
+  remark      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company     Company  @relation(fields: [companyId], references: [id])
+}
+
+model JournalEntry {
+  id          String   @id @default(cuid())
+  date        String
+  voucherNo   String
+  type        String   // sales, purchase, expense, other
+  account     String
+  debit       Float    @default(0)
+  credit      Float    @default(0)
+  counterparty String?
+  remark      String?
+  sourceDoc   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}

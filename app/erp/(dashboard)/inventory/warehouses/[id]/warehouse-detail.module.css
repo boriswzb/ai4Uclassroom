@@ -1,0 +1,75 @@
+.header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.backBtn {
+  padding: 8px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: #94a3b8;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.backBtn:hover { background: rgba(255, 255, 255, 0.07); color: #e2e8f0; }
+.headerInfo { display: flex; align-items: center; gap: 12px; }
+.title { font-size: 18px; font-weight: 600; color: #f1f5f9; margin: 0; }
+.badge {
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.badgeCustomer { background: rgba(16, 185, 129, 0.1); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.2); }
+.badgeSupplier { background: rgba(245, 158, 11, 0.1); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.2); }
+.badgeBoth { background: rgba(99, 102, 241, 0.1); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.2); }
+.badgeActive { background: rgba(16, 185, 129, 0.1); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.2); }
+.badgeInactive { background: rgba(248, 113, 113, 0.1); color: #f87171; border: 1px solid rgba(248, 113, 113, 0.2); }
+.badgePending { background: rgba(245, 158, 11, 0.1); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.2); }
+.badgeCompleted { background: rgba(16, 185, 129, 0.1); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.2); }
+.badgeCancelled { background: rgba(107, 114, 128, 0.1); color: #9ca3af; border: 1px solid rgba(107, 114, 128, 0.2); }
+.badgeDraft { background: rgba(99, 102, 241, 0.1); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.2); }
+.badgeConfirmed { background: rgba(59, 130, 246, 0.1); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.2); }
+.badgeShipped { background: rgba(245, 158, 11, 0.1); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.2); }
+.badgeDelivered { background: rgba(16, 185, 129, 0.1); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.2); }
+.container { padding: 24px; }
+.section {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+.sectionTitle { font-size: 14px; font-weight: 600; color: #e2e8f0; margin: 0 0 16px 0; }
+.infoGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.infoItem { display: flex; flex-direction: column; gap: 4px; }
+.infoLabel { font-size: 12px; color: #64748b; font-weight: 500; }
+.infoValue { font-size: 13px; color: #f1f5f9; }
+.tagGrid { display: flex; flex-wrap: wrap; gap: 8px; }
+.tag { padding: 4px 10px; background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.2); border-radius: 20px; font-size: 12px; color: #a5b4fc; }
+.stockWarning { background: rgba(248, 113, 113, 0.08); border: 1px solid rgba(248, 113, 113, 0.2); color: #f87171; padding: 4px 10px; border-radius: 20px; font-size: 12px; }
+.stockNormal { background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.2); color: #10b981; padding: 4px 10px; border-radius: 20px; font-size: 12px; }
+.remark { font-size: 13px; color: #94a3b8; line-height: 1.6; white-space: pre-wrap; }
+.itemsTable { display: flex; flex-direction: column; gap: 8px; }
+.itemsHeader { display: grid; grid-template-columns: 2fr 100px 120px; gap: 10px; padding: 8px 0; font-size: 11px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
+.itemRow { display: grid; grid-template-columns: 2fr 100px 120px; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.04); }
+.amountSummary { display: flex; flex-direction: column; gap: 10px; max-width: 300px; margin-left: auto; }
+.amountRow { display: flex; justify-content: space-between; font-size: 13px; color: #94a3b8; }
+.totalRow { padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.08); font-weight: 600; color: #e2e8f0; }
+.totalAmount { font-size: 18px; color: #f1f5f9; }
+.actions { display: flex; justify-content: space-between; align-items: center; padding-top: 20px; border-top: 1px solid rgba(255, 255, 255, 0.06); }
+.backLink { font-size: 13px; color: #64748b; text-decoration: none; }
+.backLink:hover { color: #94a3b8; }
+.actionBtns { display: flex; gap: 10px; }
+.editBtn { padding: 9px 16px; background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.2); border-radius: 8px; color: #a5b4fc; font-size: 13px; cursor: pointer; transition: all 0.15s; }
+.editBtn:hover { background: rgba(99, 102, 241, 0.15); }
+.deleteBtn { padding: 9px 16px; background: rgba(248, 113, 113, 0.08); border: 1px solid rgba(248, 113, 113, 0.15); border-radius: 8px; color: #f87171; font-size: 13px; cursor: pointer; transition: all 0.15s; }
+.deleteBtn:hover { background: rgba(248, 113, 113, 0.15); }
+.probabilityBar { display: flex; align-items: center; gap: 10px; }
+.probabilityTrack { flex: 1; height: 6px; background: rgba(255, 255, 255, 0.08); border-radius: 3px; overflow: hidden; }
+.probabilityFill { height: 100%; background: linear-gradient(90deg, #6366f1, #8b5cf6); border-radius: 3px; }
+.probabilityText { font-size: 13px; font-weight: 600; color: #a5b4fc; min-width: 40px; }

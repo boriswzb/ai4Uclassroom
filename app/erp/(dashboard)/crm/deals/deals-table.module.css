@@ -1,0 +1,165 @@
+.tableWrapper {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.tableHeader {
+  padding: 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.searchInput {
+  padding: 8px 14px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: #f1f5f9;
+  font-size: 13px;
+  outline: none;
+  min-width: 200px;
+  transition: border-color 0.2s;
+}
+.searchInput::placeholder { color: #475569; }
+.searchInput:focus { border-color: rgba(99, 102, 241, 0.5); }
+
+.filterSelect {
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: #94a3b8;
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table thead tr {
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.table th {
+  padding: 12px 16px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  color: #cbd5e1;
+}
+
+.row:hover { background: rgba(255, 255, 255, 0.03); }
+.row:last-child td { border-bottom: none; }
+
+.checkboxCell { width: 40px; }
+.rightCell { text-align: right; }
+
+.dealName { font-weight: 600; color: #e2e8f0; }
+.dealAmount { font-weight: 600; color: #34d399; font-size: 14px; }
+
+.companyCell, .contactCell { display: flex; flex-direction: column; gap: 2px; }
+.companyName, .contactName { color: #e2e8f0; }
+.companySub { color: #64748b; font-size: 12px; }
+
+.stageBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.stageDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.stage_qualification { background: rgba(148, 163, 184, 0.12); color: #94a3b8; }
+.stage_qualification .stageDot { background: #94a3b8; }
+.stage_proposal { background: rgba(96, 165, 250, 0.12); color: #60a5fa; }
+.stage_proposal .stageDot { background: #60a5fa; }
+.stage_negotiation { background: rgba(251, 191, 36, 0.12); color: #fbbf24; }
+.stage_negotiation .stageDot { background: #fbbf24; }
+.stage_contract { background: rgba(52, 211, 153, 0.12); color: #34d399; }
+.stage_contract .stageDot { background: #34d399; }
+
+.probability { color: #94a3b8; font-size: 12px; }
+
+.source { color: #64748b; font-size: 12px; }
+.expectedClose { color: #64748b; font-size: 12px; }
+
+.actions { display: flex; gap: 4px; }
+.actionBtn {
+  padding: 5px 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.actionBtn:hover { background: rgba(255, 255, 255, 0.08); }
+
+.emptyState {
+  padding: 60px;
+  text-align: center;
+  color: #64748b;
+}
+
+.loading {
+  color: #64748b;
+  padding: 60px;
+  text-align: center;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.paginationInfo { font-size: 12px; color: #64748b; }
+.paginationBtns { display: flex; gap: 4px; }
+.pageBtn {
+  min-width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  color: #94a3b8;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.pageBtn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); color: #e2e8f0; }
+.pageBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+.pageBtn.active {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: rgba(99, 102, 241, 0.3);
+  color: #a5b4fc;
+  font-weight: 600;
+}

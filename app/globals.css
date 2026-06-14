@@ -277,3 +277,30 @@
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* ================================================================
+ *  AI4U 量化 App 移动端适配
+ *  当 WebView UA 含 "AI4UQuantApp" 时（即运行在原生 App 内），
+ *  自动应用以下样式：
+ *    1. 隐藏"专业模式"链接（手机上只允许速览模式）
+ *    2. 减少内容两侧内边距（手机屏幕窄）
+ *    3. 表格字体略缩小
+ * ================================================================ */
+@media (max-width: 768px) {
+  /* 速览模式 + 移动 App：紧凑布局 */
+  body.ai4u-quant-app main {
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+  }
+
+  body.ai4u-quant-app header {
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+  }
+}
+
+/* 通过 JS 在 App 内为 <body> 添加 .ai4u-quant-app 类 */
+body.ai4u-quant-app a[href="/quant/pro"],
+body.ai4u-quant-app a[href^="/quant/pro"] {
+  display: none !important;
+}

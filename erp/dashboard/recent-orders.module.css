@@ -1,0 +1,50 @@
+.widget { /* same base */ }
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.title { font-size: 15px; font-weight: 600; color: #e2e8f0; }
+.link { font-size: 12px; color: #60a5fa; text-decoration: none; }
+.link:hover { text-decoration: underline; }
+
+.list { display: flex; flex-direction: column; }
+
+.item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.item:last-child { border-bottom: none; }
+
+.info { display: flex; flex-direction: column; gap: 2px; }
+
+.orderId { font-size: 13px; font-weight: 600; color: #e2e8f0; }
+.customer { font-size: 12px; color: #94a3b8; }
+.date { font-size: 11px; color: #475569; margin-top: 2px; }
+
+.right { text-align: right; }
+
+.amount {
+  font-size: 14px;
+  font-weight: 700;
+  color: #34d399;
+  margin-bottom: 4px;
+}
+
+.status {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  display: inline-block;
+}
+
+.status.confirmed { background: rgba(52, 211, 153, 0.15); color: #34d399; }
+.status.draft { background: rgba(148, 163, 184, 0.15); color: #94a3b8; }
+.status.delivered { background: rgba(96, 165, 250, 0.15); color: #60a5fa; }
