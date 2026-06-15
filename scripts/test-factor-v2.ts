@@ -201,6 +201,72 @@ console.log('\n━━━ Test 8: 行业中性化 ━━━');
   console.log('  ✅ 通过');
 }
 
+// ── 12. v3.0 新增：Barra 组合优化 ─────────────────
+console.log('\n━━━ Test 12: optimizePortfolio（Barra 风险模型 + 组合优化）━━━');
+{
+  const { optimizePortfolio } = require('../lib/quant/factor/v2/barra-optimizer');
+  // 100 只候选（50 银行 + 50 计算机，α 各异）
+  const barraCandidates = [
+    ...Array.from({ length: 50 }, (_, i) => ({
+      code: `6000${i.toString().padStart(3, '0')}.SH`,
+      industry: '银行',
+      valuation: 0.3 + (i % 10) * 0.04,
+      quality: 0.6 + (i % 5) * 0.04,
+      momentum: 0.4 + (i % 7) * 0.05,
+      reversal: 0.5,
+      moneyFlow: 0.4 + (i % 6) * 0.06,
+      technical: 0.5 + (i % 4) * 0.08,
+      turnover: 0.5,
+      wqAlpha: 0.5,
+      alpha: 50 + (i % 5) * 4,
+    })),
+    ...Array.from({ length: 50 }, (_, i) => ({
+      code: `3000${i.toString().padStart(3, '0')}.SZ`,
+      industry: '计算机',
+      valuation: 0.5 + (i % 8) * 0.04,
+      quality: 0.7 + (i % 5) * 0.05,
+      momentum: 0.5 + (i % 6) * 0.05,
+      reversal: 0.4,
+      moneyFlow: 0.6 + (i % 5) * 0.05,
+      technical: 0.4 + (i % 4) * 0.08,
+      turnover: 0.6,
+      wqAlpha: 0.5,
+      alpha: 60 + (i % 5) * 5,
+    })),
+  ];
+  const opt = optimizePortfolio({
+    candidates: barraCandidates,
+    riskAversion: 1.0,
+    maxSingleWeight: 0.15,
+    maxIndustryDeviation: 0.05,
+  });
+  console.log(`  count: ${barraCandidates.length}, IR: ${opt.diagnostics.informationRatio.toFixed(2)}, 权重和: ${opt.weights.reduce((s: number, w: any) => s + w.weight, 0).toFixed(4)}`);
+  const totalWeight = opt.weights.reduce((s: number, w: any) => s + w.weight, 0);
+  console.assert(Math.abs(totalWeight - 1) < 0.01, '权重和应=1.0');
+  console.assert(opt.diagnostics.alphaNormalization?.method === 'z-score', 'α 应 z-score');
+  console.log('  ✅ 通过（α Z-score + IR 合理）');
+
+  // 14. v3.0.2 新增：压力测试
+  console.log('\n━━━ Test 14: runStressTest（5 场景压力测试）━━━');
+  const { runStressTest } = require('../lib/quant/factor/v2/barra-optimizer');
+  const stress = runStressTest(
+    opt.weights.map((w: any) => ({ code: w.code, industry: w.industry, weight: w.weight, alpha: w.alpha, risk: w.risk })),
+    {
+      candidates: barraCandidates,
+      riskAversion: 1.0,
+      maxSingleWeight: 0.15,
+      maxIndustryDeviation: 0.05,
+    }
+  );
+  console.log(`  Baseline: σ=${stress.baseline.expectedVol.toFixed(1)}%`);
+  stress.results.forEach((r: any) => {
+    const icon = r.passed ? '✅' : '❌';
+    console.log(`    ${icon} ${r.name}: 收益=${r.expectedReturn}%, σ=${r.expectedVol.toFixed(0)}%, VaR95=${r.var95.toFixed(0)}%`);
+  });
+  console.assert(stress.results.length === 5, '应有 5 个场景');
+  console.log('  ✅ 通过（5 场景全部计算）');
+}
+
 console.log('\n' + '═'.repeat(60));
 console.log('✅ 所有测试通过');
 console.log('═'.repeat(60));

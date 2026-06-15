@@ -23,6 +23,24 @@ export {
   type ScoreV2Output,
   type V1PillarScores,
 } from './scorer';
+export {
+  runRecommendationWalkForward,
+  type WalkForwardRecommendationConfig,
+  type WalkForwardRecommendationReport,
+  type WalkForwardWindowResult,
+} from './walkforward-recommendation';
+export {
+  computeConcentration,
+  type ConcentrationConfig,
+  type ConcentrationReport,
+} from './concentration';
+export {
+  optimizePortfolio,
+  buildFactorCovariance,
+  STYLE_FACTORS,
+  type BarraConfig,
+  type StyleFactor,
+} from './barra-optimizer';
 
 // ── 便捷入口（带 v1/v2 对比）─────────────────────────
 import type { FactorRawValues, V2ScoreResult, V2ScoreOptions } from './types';

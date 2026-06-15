@@ -21,13 +21,13 @@
     "stockCodes": []
   },
   {
-    "id": "rpt-apk-ai4u-v1",
-    "title": "AI4U 量化 App (Android v1.0.0) — 移动版安装包",
-    "filename": "AI4U-Quant-App-v1.0.0.apk",
+    "id": "rpt-apk-ai4u-v3.0.2",
+    "title": "AI4U 量化 App (Android v3.0.2) — 移动版安装包",
+    "filename": "AI4U-Quant-App-v3.0.2.apk",
     "type": "apk",
     "category": "移动 App",
-    "date": "2026-06-03",
-    "createdAt": "2026-06-03T18:45:00.000Z",
+    "date": "2026-06-15",
+    "createdAt": "2026-06-15T20:20:00.000Z",
     "size": 5859010,
     "author": "系统生成",
     "tags": [
@@ -35,9 +35,14 @@
       "移动 App",
       "WebView",
       "速览模式",
+      "PWA",
+      "v3.0.2",
+      "5 Tab 底部导航",
+      "Barra 风险模型",
+      "11 类因子",
       "安装包"
     ],
-    "summary": "AI4U 量化交易系统 Android 客户端。原生 WebView 容器，加载速览模式（/quant），自动隐藏专业模式。5.6MB，支持 Android 7.0+。安装方法：手机设置 → 允许安装未知来源 → 点击 APK 安装。",
+    "summary": "AI4U 量化交易系统 Android 客户端 v3.0.2（2026-06-15）。原生 WebView 容器 + 5.6MB + Android 7.0+。加载 https://www.ai4uclassroom.com/quant （速览模式，自动隐藏专业模式链接）。v3.0.2 重大更新：✅ 5 Tab 底部导航（推荐/盯盘/交易/Auto/我）✅ iOS Add to Home Screen + manifest.json + 4 shortcuts ✅ 11 类因子 / 8 风格 / Barra 风险模型 + 风险归因 ✅ 5 场景压力测试 ✅ Rank IC + IC 衰减 ✅ α Z-score 标准化 ✅ WF 真实收益验证 ✅ 5 步新手指引 + 自动高亮 ✅ 风控总览 4 维度面板 ✅ Barra 一键下单 + 同步自动驾驶 ✅ 反事实对比 ✅ 移动端 touch 优化（44px 最小点击区 / 禁用双击缩放 / iOS safe-area）。安装方法：手机设置 → 允许安装未知来源 → 点击 APK 安装。",
     "stockCodes": []
   },
   {

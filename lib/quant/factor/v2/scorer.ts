@@ -20,10 +20,10 @@ import type {
   V2ScoreOptions,
   ShenwanIndustry,
 } from './types';
-import { computeFactorPercentiles, checkCollinearity } from './percentile';
+import { computeFactorPercentiles, checkCollinearity, fillIndustryMedian } from './percentile';
 import { neutralize } from './neutralize';
 import { detectFlags } from './factors';
-import { V2_DEFAULT_WEIGHTS } from './weights';
+import { V2_DEFAULT_WEIGHTS, deriveWeightsFromIC } from './weights';
 
 // ── 评分（输入 pcts，输出 V2ScoreResult[]）────────────
 function scoreFromPercentiles(
@@ -110,6 +110,9 @@ export interface ScoreV2Output {
     originalCount: number;
     weightsUsed: Record<string, number>;
     weightSource: 'ic' | 'default' | 'manual';
+    // P0 修复（2026-06-15）：暴露数据缺失率给前端 diagnostics UI
+    dataLossRate?: Record<string, number>;
+    dataLossWarnings?: string[];
   };
 }
 
@@ -138,7 +141,15 @@ export function scoreV2(input: ScoreV2Input): ScoreV2Output {
   }
 
   // 3. 截面百分位归一化
-  const { pcts, warnings: percentileWarnings } = computeFactorPercentiles(filteredCandidates);
+  // v2.1.1（2026-06-15）：先做缺失值填充（用行业中位数），再做百分位归一化
+  const filledCandidates = fillIndustryMedian(filteredCandidates, [
+    'pe', 'pb', 'ps', 'roe', 'grossMargin', 'debtRatio', 'accrualsRatio',
+  ]);
+  // v2.1.1（2026-06-15）：传入 icStats 让技术类因子按 IC 方向自适应反向；传入 longMomentum 启用长动量
+  const { pcts, warnings: percentileWarnings } = computeFactorPercentiles(
+    filledCandidates,
+    { icStats: options.icStats, longMomentum: options.longMomentum }
+  );
 
   // 4. 中性化（行业 + 市值）
   const industries = filteredCandidates.map(c => c.industry);
@@ -157,10 +168,66 @@ export function scoreV2(input: ScoreV2Input): ScoreV2Output {
     checkCollinearity(neutralPcts, factorNames, 0.7);
 
   // 6. 选权重
-  const weightsUsed: Record<string, number> =
-    options.weightMode === 'manual' && options.customWeights
-      ? { ...options.customWeights }
-      : { ...V2_DEFAULT_WEIGHTS };
+  //    v2.1（2026-06-15）：新增 'ic' 模式支持 — 之前 weightMode='ic' 是个空选项（只 'manual' 生效）
+  //      现在用本地算出的 icStats（来自 route.ts computeSimpleIC）覆盖默认权重
+  //      IC 历史有 1+ 条时优先用 IC 派生，否则降级 default
+  let weightsUsed: Record<string, number>;
+  let weightSource: 'default' | 'ic' | 'manual';
+  if (options.weightMode === 'manual' && options.customWeights) {
+    weightsUsed = { ...options.customWeights };
+    weightSource = 'manual';
+  } else if (options.weightMode === 'ic' && options.icStats && Object.keys(options.icStats).length >= 3) {
+    // IC 动态定权：|IC| × tanh(|IR|)，保留正负号
+    weightsUsed = deriveWeightsFromIC(options.icStats);
+    weightSource = 'ic';
+  } else {
+    weightsUsed = { ...V2_DEFAULT_WEIGHTS };
+    weightSource = 'default';
+  }
+
+  // ── P0 修复（2026-06-15）：原始数据缺失率检测 + 自动降权 ───────
+  // 背景：EM 财务接口在服务端 100% 失败时，roe/grossMargin 全 0、debtRatio 全 50（defaults），
+  //   即便 percentile/neutralize 两层都修了（前面已置 0.5），这一大类的"区分能力"仍然是 0。
+  // 检测：每只票的 quality 原始值 = (roe_pct + gm_pct + dr_pct) 三个 pct 的均值。
+  //   当 roe/gm/dr 三个 raw 中两个以上是 0/默认时，认为该股 quality 数据缺失。
+  // 阈值：>50% 候选缺失则把 quality 权重降为 0（其它大类按比例放大补偿）
+  // 范围（保守）：valuation 也做同样检测（PE 来自 sina，PB 来自 EM）
+  const dataLossWarnings: string[] = [];
+  const factorLossRate: Record<string, number> = {};
+  const lossDetect = (factor: 'quality' | 'valuation'): { keys: (keyof FactorRawValues)[] } => {
+    if (factor === 'quality') return { keys: ['roe', 'grossMargin', 'debtRatio'] };
+    return { keys: ['pe', 'pb', 'ps'] };
+  };
+  for (const factor of ['quality', 'valuation'] as const) {
+    const { keys } = lossDetect(factor);
+    let missing = 0;
+    for (const c of filteredCandidates) {
+      // 缺失判定：raw 值是 defaults（roe=0, gm=0, debtRatio=50, pe=0, pb=0, ps=0）
+      const isMissing = keys.every((k) => {
+        const v = c[k] as number;
+        // debtRatio 默认 50，roe/gm/pe/pb/ps 默认 0
+        return v === 0 || v === 50;
+      });
+      if (isMissing) missing++;
+    }
+    const rate = filteredCandidates.length > 0 ? missing / filteredCandidates.length : 0;
+    factorLossRate[factor] = rate;
+    if (rate > 0.5) {
+      dataLossWarnings.push(`⚠️ ${factor} 原始数据 ${(rate * 100).toFixed(0)}% 缺失（接口失败），自动降权至 0`);
+      weightsUsed[factor] = 0;
+    } else if (rate > 0.2) {
+      dataLossWarnings.push(`⚠️ ${factor} 原始数据 ${(rate * 100).toFixed(0)}% 缺失（接口降级）`);
+    }
+  }
+  // 权重归一化：被降权为 0 后剩余的权重按比例放大，确保综合分总量稳定
+  const totalWeight = Object.values(weightsUsed).reduce((s, v) => s + v, 0);
+  if (totalWeight > 0 && totalWeight < 100) {
+    const scale = 100 / totalWeight;
+    for (const k of Object.keys(weightsUsed)) {
+      weightsUsed[k] = Math.round(weightsUsed[k] * scale * 100) / 100;
+    }
+    dataLossWarnings.push(`ℹ️ 权重按剩余总和归一化（×${scale.toFixed(2)}）`);
+  }
 
   // 7. 评分
   let results = scoreFromPercentiles(neutralPcts, filteredCandidates, weightsUsed, filteredFlags);
@@ -179,7 +246,10 @@ export function scoreV2(input: ScoreV2Input): ScoreV2Output {
       filteredCount: originalCount - filteredCandidates.length,
       originalCount,
       weightsUsed,
-      weightSource: options.weightMode,
+      weightSource,
+      // P0 修复：暴露数据缺失率给前端
+      dataLossRate: factorLossRate,
+      dataLossWarnings,
     },
   };
 }

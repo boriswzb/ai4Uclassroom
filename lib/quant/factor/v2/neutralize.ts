@@ -182,13 +182,27 @@ export function neutralize(
       warnings.push(`⚠️ 因子 ${factor} OLS 失败，保留原值`);
       continue;
     }
-    // 残差 → 重新归一化到 0-1
+    // ── P0 修复（2026-06-15）：全等值残差检测 ─────────────────
+    // 背景：percentile.ts 对"全默认值/全 NaN"输入走 fallback 后，所有股票 pct 相同
+    //   （如 EM 财务接口全失败时 roe=0/gm=0/debtRatio=50 → quality 全 = 0.333）
+    // 这种情况 OLS 残差几乎全 0（被行业/市值 dummy 解释完），再 rank/N 排名会无意义
+    // 把 top1 算成 100/100=1.0=100 分灌满，导致 quality/valuation 等大类"全是 100"
+    // 修复：若残差 std 极小（<1e-6），跳过该因子的中性化重排名，
+    //       把所有票该因子 pct 置 0.5（中性，不贡献区分度）
+    const meanR = residuals.reduce((s, x) => s + x, 0) / residuals.length;
+    const stdR = Math.sqrt(residuals.reduce((s, x) => s + (x - meanR) ** 2, 0) / residuals.length);
+    if (stdR < 1e-6) {
+      warnings.push(`⚠️ 因子 ${factor} 残差全等（std=${stdR.toExponential(2)}，原 pct 全相等），跳过中性化，置 0.5`);
+      newPcts.forEach((p) => { (p as any)[factor] = 0.5; });
+      continue;
+    }
+    // 残差 → 重新归一化到 0-1（闭区间排名：rank = count(<= value)，保证最大值得 1.0）
     const sortedResid = [...residuals].sort((a, b) => a - b);
     newPcts.forEach((p, i) => {
       const r = residuals[i];
       let rank = 0;
       for (let k = 0; k < sortedResid.length; k++) {
-        if (sortedResid[k] <= r) rank = k + 1;
+        if (sortedResid[k] <= r) rank = k + 1;  // 闭区间：<= 而非 <
       }
       (p as any)[factor] = rank / sortedResid.length;
     });

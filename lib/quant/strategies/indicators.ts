@@ -163,8 +163,13 @@ export function KDJ(
 
       const rsv = high === low ? 50 : ((close - low) / (high - low)) * 100;
 
-      const prevK = k.length > 0 ? k[k.length - 1] : 50;
-      const prevD = d.length > 0 ? d[d.length - 1] : 50;
+      // 修复（2026-06-15）：i == period - 1 是第一个有值的索引，prevK/prevD 用 50 初始化（KDJ 标准）
+      //   旧代码直接读 k[-1] = NaN，导致 rsv 永远被 NaN 污染 → k/d 雪崩全 NaN → 上游 fallback 50
+      //   现象：所有股票 kdjK=50 (80/80)，technical 子项的 kdj 完全不贡献区分度
+      //   修复后，茅台/银行/科技股等会输出 0~100 范围的有效 KDJ 值
+      const isFirst = i === period - 1;
+      const prevK = isFirst ? 50 : (k[k.length - 1] ?? 50);
+      const prevD = isFirst ? 50 : (d[d.length - 1] ?? 50);
 
       const kValue = (2 * prevK + rsv) / 3;
       const dValue = (2 * prevD + kValue) / 3;
@@ -341,13 +346,36 @@ export function ADX(
   // Wilder 平滑：EMA with alpha = 1/period
   const alpha = 1 / period;
   const smooth = (arr: number[], n: number): number[] => {
-    const result: number[] = [];
-    // 第一个有效值是前 n 个的 SUM
+    const result: number[] = new Array(arr.length).fill(NaN);
+    // 修复（2026-06-15）：跳过 NaN 找第一个有效值；sum 仅累加有效值；保持 result 长度与输入一致
+    //   旧代码：sum 包含前 13 个 NaN（dx 在 i<13 时都是 NaN）→ result 第一个值是 NaN → 雪崩全 NaN
+    //   上游 factors.ts:adx fallback 0 → 80/80 全 0
+    let firstValid = -1;
+    for (let i = 0; i < arr.length; i++) {
+      if (!isNaN(arr[i])) { firstValid = i; break; }
+    }
+    if (firstValid === -1) {
+      // 全 NaN：返回全 0（让上游不要 fallback NaN）
+      return arr.map(() => 0);
+    }
+
+    // 第一个有效值 = sum of [firstValid, firstValid+n) 内的所有有效值
+    // 这是 Wilder 标准：first = sum of n 个值
     let sum = 0;
-    for (let i = 0; i < n && i < arr.length; i++) sum += arr[i];
-    result.push(sum);
-    for (let i = n; i < arr.length; i++) {
-      result.push(result[result.length - 1] * (1 - alpha) + arr[i] * alpha);
+    const upper = Math.min(firstValid + n, arr.length);
+    for (let i = firstValid; i < upper; i++) {
+      if (!isNaN(arr[i])) sum += arr[i];
+    }
+    result[firstValid] = sum;
+
+    // firstValid+1..firstValid+n-1 之间：用 EMA 形式（prev * (1-a) + cur * a）递推
+    //   prev 是 result[firstValid] = sum，但 sum 是 n 个的累计 → 之后 n 步要把"窗口"归一到 1 个值
+    //   标准的 Wilder 平滑：从 firstValid 之后，result[i] = result[i-1] * (1-a) + arr[i] * a
+    //   这才是对的（firstValid 之后每一步 EMA 一格）
+    for (let i = firstValid + 1; i < arr.length; i++) {
+      const prev = result[i - 1];
+      const cur = isNaN(arr[i]) ? 0 : arr[i];
+      result[i] = prev * (1 - alpha) + cur * alpha;
     }
     return result;
   };

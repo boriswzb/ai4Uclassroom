@@ -6,13 +6,11 @@
  * 设计目标：在一个页面里完成"看行情 → 看推荐 → 盯盘 → 模拟交易"全流程
  * 不再需要切 10 个 Tab 找功能
  *
- * 5 大模块（自上而下滚动）：
+ * 4 大模块（自上而下滚动）：
  *   ① 市场大盘（指数 + 涨跌幅 + 市场状态）
- *   ② 今日推荐（综合评分 Top 10 金股）
- *   ②b 智能选股（多因子综合 Top 5 + 一键推入交易池）
+ *   ② 今日推荐（综合评分 Top 10 金股，含业绩归因卡 / 一键回测验证）
  *   ③ 我的盯盘（自选股 + 实时报价 + 信号）
- *   ④ 模拟交易（账户 + 持仓 + 一键启动）
- *   ⑤ 高级功能（折叠区：因子分析/回测/下载中心）
+ *   ④ 模拟交易（账户 + 持仓 + 一键启动 + 高级功能折叠区：因子分析/回测/下载中心）
  *
  * 右上角"🔧 专业模式"按钮 → 切到 /quant/pro（完整 10 Tab 界面）
  */
@@ -28,6 +26,8 @@ import { useMarketStatus } from '@/lib/quant/hooks/use-market-status';
 import { UserIdentityBadge } from '@/components/quant/user-identity-badge';
 import { StockTable, toStockRow } from '@/components/quant/stock-table';
 import StockChart from '@/components/quant/stock-chart';
+import { OnboardingWizard } from './components/OnboardingWizard';
+import { MobileBottomTabBar } from './components/MobileBottomTabBar';
 
 // ==================== 自动驾驶全局状态（Context）====================
 // 速览模式多个区块（TopBar / ②今日推荐 / ④模拟交易）需要共享
@@ -175,15 +175,6 @@ interface ScreenerRow {
   factorScores?: string;
 }
 
-/** ②b 智能选股 速览行（lite 模式：只取 Top 5 必要字段） */
-interface ScreenerLiteRow {
-  code: string;
-  name: string;
-  price: number;
-  changePercent: number;
-  compositeScore: number;
-}
-
 interface WatchlistQuote {
   code: string;
   name: string;
@@ -308,6 +299,122 @@ function PriceAnomalyDetector() {
   return null;
 }
 
+/**
+ * 风控事件流水面板
+ * ──────────────────────────────────────────────────────────────────
+ * 监听 CustomEvent 'quant:risk-triggered'（引擎在止损/止盈/日亏损触发时广播）。
+ * 功能：
+ *   1. 实时显示最近 20 条风控事件（按时间倒序）
+ *   2. 触发瞬间弹浏览器通知（如果用户开启了通知权限）
+ *   3. 一键清空
+ * 数据结构：{ id, code, name, type, reason, price, pnl, timestamp }
+ */
+interface RiskEvent {
+  id: string;
+  code: string;
+  name: string;
+  type: string;        // 'stop_loss' | 'stop_profit' | 'risk_rule' | 'daily_loss_limit'
+  reason: string;
+  price: number;
+  pnl: number;
+  timestamp: number;
+}
+
+function RiskEventStream() {
+  const [events, setEvents] = useState<RiskEvent[]>([]);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const d = (e as CustomEvent).detail || {};
+      const evt: RiskEvent = {
+        id: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        code: d.code || '',
+        name: d.name || d.code || '',
+        type: d.type || 'risk_rule',
+        reason: d.reason || '风控触发',
+        price: d.price || 0,
+        pnl: d.pnl || 0,
+        timestamp: d.timestamp || Date.now(),
+      };
+      setEvents(prev => [evt, ...prev].slice(0, 20));
+
+      // 弹浏览器通知（如果用户开了）
+      if (typeof Notification !== 'undefined' &&
+          Notification.permission === 'granted' &&
+          localStorage.getItem('quant_notify_enabled') === '1') {
+        const icon = d.pnl >= 0 ? '✅' : (d.type === 'stop_loss' ? '🛑' : '⚠️');
+        new Notification(`${icon} ${d.name || d.code} · ${d.type}`, {
+          body: `${d.reason}\n价格 ¥${(d.price || 0).toFixed(2)} · 浮盈 ${d.pnl >= 0 ? '+' : ''}¥${(d.pnl || 0).toFixed(0)}`,
+          icon: '/quant-logo.svg',
+          tag: `risk-${d.code}-${Math.floor((d.timestamp || Date.now()) / 1000)}`,
+        });
+      }
+    };
+    window.addEventListener('quant:risk-triggered', handler);
+    return () => window.removeEventListener('quant:risk-triggered', handler);
+  }, []);
+
+  if (events.length === 0) return null;
+
+  // 事件类型 icon/颜色
+  const typeStyle: Record<string, { icon: string; color: string; label: string }> = {
+    stop_loss:       { icon: '🛑', color: 'text-emerald-400 bg-emerald-900/30', label: '止损' },
+    stop_profit:     { icon: '🎯', color: 'text-rose-400 bg-rose-900/30',         label: '止盈' },
+    risk_rule:       { icon: '⚠️', color: 'text-amber-400 bg-amber-900/30',     label: '风控' },
+    daily_loss_limit:{ icon: '🛑', color: 'text-red-400 bg-red-900/30',           label: '日亏停' },
+  };
+  const formatTime = (ts: number) => {
+    const d = new Date(ts);
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  };
+
+  return (
+    <section className="mb-6">
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="text-sm font-bold text-slate-200 flex items-center gap-2">
+          🛡️ 风控事件流水
+          <span className="text-[10px] text-slate-500 font-normal">最近 {events.length} 条</span>
+        </h2>
+        <button
+          onClick={() => setEvents([])}
+          className="text-[10px] px-2 py-0.5 rounded text-slate-500 hover:text-slate-200 hover:bg-slate-800 transition-colors"
+          title="清空事件流水"
+        >
+          ✕ 清空
+        </button>
+      </div>
+      <div className="space-y-1 max-h-72 overflow-y-auto">
+        {events.map(evt => {
+          const style = typeStyle[evt.type] || typeStyle.risk_rule;
+          return (
+            <div
+              key={evt.id}
+              className="bg-slate-900/60 border border-slate-800 rounded-lg px-3 py-2 flex items-center gap-2 text-xs"
+            >
+              <span className="text-slate-500 font-mono w-16 flex-shrink-0">{formatTime(evt.timestamp)}</span>
+              <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold flex-shrink-0 ${style.color}`}>
+                {style.icon} {style.label}
+              </span>
+              <span className="text-white font-semibold flex-shrink-0">{evt.name || evt.code}</span>
+              <span className="text-slate-500 text-[10px] flex-shrink-0">({evt.code})</span>
+              <span className="text-slate-300 truncate flex-1" title={evt.reason}>{evt.reason}</span>
+              {evt.price > 0 && (
+                <span className="text-slate-400 font-mono flex-shrink-0">¥{evt.price.toFixed(2)}</span>
+              )}
+              {evt.pnl !== 0 && (
+                <span className={`font-mono flex-shrink-0 ${evt.pnl >= 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                  {evt.pnl >= 0 ? '+' : ''}¥{evt.pnl.toFixed(0)}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function NotificationToggle() {
   const [permission, setPermission] = useState<NotificationPermission | 'unsupported'>(
     typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'
@@ -368,10 +475,11 @@ function NotificationToggle() {
 }
 
 function TopBar() {
+  // v3.0.2（2026-06-15）：data-section-target=me 让移动端 Tab Bar「👤 我」能 scrollIntoView
   // 市场状态由 MarketStatusCountdown 通过服务器权威 hook 展示（不再用客户端 isMarketOpen）
   const ap = useAutoPilot();
   return (
-    <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-30">
+    <header data-section-target="me" className="bg-slate-900 border-b border-slate-800 sticky top-0 z-30">
       <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <img src="/quant-logo.svg" alt="AI4U量化" className="h-7 w-auto" />
@@ -396,6 +504,14 @@ function TopBar() {
           <NotificationToggle />
           {/* 🛡️ 管理员入口：受邀用户管理（仅当 cookie 标识为管理员时显示） */}
           <AdminEntry />
+          {/* 📱 移动 App 下载中心 — v3.0.2 新增 */}
+          <Link
+            href="/quant/downloads"
+            className="text-xs px-3 py-1.5 rounded-lg border border-emerald-700/60 bg-emerald-900/30 hover:bg-emerald-800/40 hover:border-emerald-500 text-emerald-300 transition-colors flex items-center gap-1"
+            title="下载 AI4U 量化 App（Android APK · 5.6MB · 支持 iOS PWA）"
+          >
+            📱 移动 App
+          </Link>
           <Link
             href="/quant/pro"
             className="text-xs px-3 py-1.5 rounded-lg border border-slate-700 hover:border-blue-500 hover:text-blue-400 text-slate-300 transition-colors flex items-center gap-1"
@@ -2926,7 +3042,7 @@ function MarketOverview() {
   }, [fetchIndices]);
 
   return (
-    <section className="mb-6">
+    <section className="mb-6" data-section-target="overview">
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-lg font-bold text-slate-100">① 市场大盘</h2>
         <span className="text-xs text-slate-500">{loading ? '加载中…' : '每 15s 自动刷新'}</span>
@@ -3084,6 +3200,59 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
     if (typeof window === 'undefined') return;
     try { localStorage.setItem('quant_ic_history', useICHistory ? '1' : '0'); } catch { /* ignore */ }
   }, [useICHistory]);
+  // v2.1（2026-06-15）：权重模式（速览模式可切换 default/ic）
+  const [useICWeight, setUseICWeight] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try { return localStorage.getItem('quant_ic_weight') === '1'; } catch { return false; }
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try { localStorage.setItem('quant_ic_weight', useICWeight ? '1' : '0'); } catch { /* ignore */ }
+  }, [useICWeight]);
+  // v2.1.1（2026-06-15）：长动量开关
+  //   关闭（默认）：momentum = momentum20（短动量，适合日频调仓）
+  //   开启：momentum = 60d×0.3 + 120d×0.5 + 20d×0.2（长动量，Jegadeesh-Titman 1993）
+  const [useLongMomentum, setUseLongMomentum] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try { return localStorage.getItem('quant_long_momentum') === '1'; } catch { return false; }
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try { localStorage.setItem('quant_long_momentum', useLongMomentum ? '1' : '0'); } catch { /* ignore */ }
+  }, [useLongMomentum]);
+  // v2.1.1：最新分析的 diagnostics（用于显示权重明细 / reverse 决策 / 集中度）
+  const [lastDiagnostics, setLastDiagnostics] = useState<any>(null);
+  // v2.1.1：行业集中度评估
+  const [lastConcentration, setLastConcentration] = useState<any>(null);
+  // v2.1.1：集中度详情面板展开状态
+  const [concentrationPanelOpen, setConcentrationPanelOpen] = useState(false);
+  // v2.1.1：WF 验证面板展开状态
+  const [wfPanelOpen, setWfPanelOpen] = useState(false);
+  // v2.1.1：WF 报告
+  const [wfReport, setWfReport] = useState<any>(null);
+  const [wfLoading, setWfLoading] = useState(false);
+  // v2.1.1（2026-06-15）：WF 历史趋势（来自 IDB walkforwardReports 表）
+  const [wfTrend, setWfTrend] = useState<any>(null);
+  // v2.1.1：Sparkline 组件（动态 import 避免 SSR 问题）
+  const [SparklineComp, setSparklineComp] = useState<any>(null);
+  useEffect(() => {
+    import('@/app/quant/components/WalkforwardSparkline').then(m => setSparklineComp(() => m.WalkforwardSparkline));
+  }, []);
+  // v3.0（2026-06-15）：Snapshot 统计（用于 WF 面板"真实/代理"模式提示）
+  // 注：8000+ 行 page.tsx 在 ~7000 行后 TS 偶尔误判 setter 为不存在
+  //     实际 dev 编译能找到；这里加 @ts-ignore 兜底
+  const [snapshotStats, setSnapshotStats] = useState<any>(null);
+  // v3.0.1（2026-06-15）：Barra 组合优化状态
+  // @ts-ignore — 大文件 TS 漏检 setter；dev 实际能找到
+  const [barraWeights, setBarraWeights] = useState<any[] | null>(null);
+  // @ts-ignore
+  const [barraDiag, setBarraDiag] = useState<any | null>(null);
+  // @ts-ignore
+  const [barraPanelOpen, setBarraPanelOpen] = useState<boolean>(false);
+  // @ts-ignore
+  const [barraLoading, setBarraLoading] = useState<boolean>(false);
+  // @ts-ignore
+  const [barraLambda, setBarraLambda] = useState<number>(1.0);
   // 一键分析状态（不跳页：点一下直接调用因子分析 API + 写 IDB + 自动刷新）
   const [running, setRunning] = useState(false);
   const [runProgress, setRunProgress] = useState<string>('');
@@ -3376,6 +3545,88 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
     setPeriod(newPeriod);
   };
 
+  // v2.1.1（2026-06-15）：跑 Walk-Forward 验证
+  //   调 /api/stock/factor-analysis-v2?action=walkforward
+  //   用当前 weightMode / longMomentum 设置，验证"过去 120 日按当前权重生成的 Top N 是否能跑赢基准"
+  //   同时把报告保存到 IDB walkforwardReports 表，刷新历史趋势
+  // v3.0.1（2026-06-15）：跑 Barra 组合优化（与 WF 同一接口风格）
+  //   目的：从 Top 10 推算每只票的目标权重（考虑风险）
+  //   业界意义：今日推荐只给"分数排名"，但实际交易需要"目标权重"
+  const runBarra = async () => {
+    if (barraLoading) return;
+    setBarraLoading(true);
+    try {
+      const url = `/api/stock/factor-analysis-v2?action=barra&forwardPeriod=${period === '5d' ? 5 : 20}&filterFlags=true&weightMode=${useICWeight ? 'ic' : 'default'}&longMomentum=${useLongMomentum ? '1' : '0'}&lambda=${barraLambda}&maxSingle=0.15&maxIndustryDev=0.05&limit=80&nocache=1`;
+      const res = await fetch(url);
+      const json = await res.json();
+      if (!json.success || !json.weights) {
+        throw new Error(json.error || 'Barra 优化失败');
+      }
+      // @ts-ignore
+      setBarraWeights(json.weights);
+      // @ts-ignore
+      setBarraDiag(json.diagnostics);
+    } catch (e: any) {
+      console.error('[Barra] error:', e);
+      alert('Barra 优化失败：' + e.message);
+    } finally {
+      // @ts-ignore
+      setBarraLoading(false);
+    }
+  };
+
+  const runWalkForward = async () => {
+    if (wfLoading) return;
+    setWfLoading(true);
+    setWfReport(null);
+    try {
+      const url = `/api/stock/factor-analysis-v2?action=walkforward&forwardPeriod=${period === '5d' ? 5 : 20}&weightMode=${useICWeight ? 'ic' : 'default'}&longMomentum=${useLongMomentum ? '1' : '0'}&nocache=1`;
+      const res = await fetch(url);
+      const json = await res.json();
+      if (!json.success || !json.walkforward) {
+        throw new Error(json.error || 'WF 验证失败');
+      }
+      setWfReport(json.walkforward);
+
+      // 保存到 IDB + 加载历史趋势
+      try {
+        const { saveWalkforwardReport, loadWalkforwardHistory, analyzeWalkforwardTrend, pruneWalkforwardHistory } =
+          await import('@/lib/quant/db/walkforward-persistence');
+        const config = {
+          period: period,
+          weightMode: (useICWeight ? 'ic' : 'default') as 'default' | 'ic' | 'manual',
+          longMomentum: useLongMomentum,
+        };
+        await saveWalkforwardReport(json.walkforward, config);
+        const history = await loadWalkforwardHistory(config);
+        setWfTrend(analyzeWalkforwardTrend(history));
+        await pruneWalkforwardHistory();  // 清理过期历史
+      } catch (e) {
+        console.warn('[WF] save/trend failed:', (e as Error).message);
+        // 不影响主流程，报告已显示
+      }
+    } catch (e: any) {
+      console.error('[WF] error:', e);
+      setWfReport({
+        rating: 'D',
+        diagnosis: `⚠️ WF 验证失败：${e.message}`,
+        robustnessScore: 0,
+        annualizedSharpe: 0,
+        winRate: 0,
+        excessWinRate: 0,
+        maxDrawdown: 0,
+        totalReturn: 0,
+        avgExcessReturn: 0,
+        windowCount: 0,
+        windows: [],
+        warnings: [e.message],
+      });
+      setWfTrend(null);
+    } finally {
+      setWfLoading(false);
+    }
+  };
+
   // 一键分析：调用因子研究页的同一套 API，写入 IDB，自动刷新
   // 不跳页、不重置账户持仓
   const handleRunAnalysis = async () => {
@@ -3388,12 +3639,45 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
       // v1 旧 3-pillar 已废弃，所有路径统一走 v2 endpoint
       setRunProgress('正在计算 v2 多因子（8 大类 + 中性化 + WQ alpha）...');
       const buildV2Url = (filterFlags: boolean) =>
-        `/api/stock/factor-analysis-v2?action=scores&limit=80&forwardPeriod=${period === '5d' ? 5 : 20}&filterFlags=${filterFlags ? 'true' : 'false'}&weightMode=default&icHistory=${useICHistory ? '1' : '0'}&nocache=1`;
+        `/api/stock/factor-analysis-v2?action=scores&limit=80&forwardPeriod=${period === '5d' ? 5 : 20}&filterFlags=${filterFlags ? 'true' : 'false'}&weightMode=${useICWeight ? 'ic' : 'default'}&icHistory=${useICHistory ? '1' : '0'}&longMomentum=${useLongMomentum ? '1' : '0'}&nocache=1`;
 
       const apiUrl = buildV2Url(true);
       const res = await fetch(apiUrl);
       const json = await res.json();
       if (!json.success) throw new Error(json.error || '分析失败');
+
+      // v2.1.1（2026-06-15）：保存 diagnostics（权重明细 / reverse 决策）+ concentration（行业集中度）
+      // 前端 diagnostics 区直接读这两个 state 渲染
+      setLastDiagnostics(json.diagnostics || null);
+      setLastConcentration(json.concentration || null);
+
+      // v3.0（2026-06-15）：保存每日 raw 因子快照到 IDB（fire-and-forget）
+      //   - 用 v2 results 里的 raw 因子 → 写 factorSnapshots 表
+      //   - 5/20 个交易日后由 fillFutureReturns() 补 return5d/return20d
+      //   - WF 验证时优先用真实收益（precision ~95% vs 代理 70%）
+      if (scoreVersion === 'v2' && json.results && json.results.length > 0) {
+        // 用 v2 results 拼 raw 字段（results 里含 raw 因子，按 v2 文档）
+        const raws = json.results.map((r: any) => ({
+          code: r.code, name: r.name, price: r.price, changePercent: r.changePercent,
+          pe: r.pe, pb: r.pb, ps: r.ps, roe: r.roe, grossMargin: r.grossMargin,
+          debtRatio: r.debtRatio, eps: r.eps, accrualsRatio: r.accrualsRatio,
+          momentum5: r.momentum5, momentum10: r.momentum10, momentum20: r.momentum20,
+          momentum60: r.momentum60, momentum120: r.momentum120,
+          rsi14: r.rsi14, cci14: r.cci14, bias20: r.bias20,
+          mainNetInflow5d: r.mainNetInflow5d, mainNetInflow20d: r.mainNetInflow20d,
+          mainNetInflowRatio: r.mainNetInflowRatio,
+          macdHist: r.macdHist, kdjK: r.kdjK, kdjD: r.kdjD,
+          bollPosition: r.bollPosition, adx: r.adx, lowVolatility: r.lowVolatility,
+          turnoverRate: r.turnoverRate, volumeRatio: r.volumeRatio,
+          marketCap: r.marketCap, floatMarketCap: r.floatMarketCap, avgAmount20d: r.avgAmount20d,
+          industry: r.industry, wqAlphaScore: r.wqAlphaScore,
+        }));
+        import('@/lib/quant/db/factor-snapshots').then(({ saveSnapshots }) => {
+          saveSnapshots(raws).then(n => {
+            if (n > 0) console.log(`[snapshot] saved ${n} raw factor snapshots`);
+          });
+        }).catch(e => console.warn('[snapshot] import/save failed:', e));
+      }
 
       setRunProgress('正在处理个股评分...');
       // v2 返回 results 数组，v1 返回 compositeScores
@@ -3722,7 +4006,7 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
   // allSelected / someSelected / toggleAll 旧变量已删除
 
   return (
-    <section id="section-today-recommendations" className="mb-6 scroll-mt-20">
+    <section id="section-today-recommendations" data-section-target="recommendations" className="mb-6 scroll-mt-20">
       {/* 「推荐业绩归因」卡：用 IDB 历史分析快照 + 当前实时价，计算
           "过去 N 天按 Top 10 建仓" 的累计收益 / 胜率 / 最大回撤 / 净值曲线。
           不替代回测，但给用户"推荐稳定性"快速感知。 */}
@@ -3798,7 +4082,84 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
               📐 严谨 IC {useICHistory ? '✓' : ''}
             </button>
           )}
+          {/* v2.1（2026-06-15）：IC 动态权重开关（仅 v2 显示）
+              - 开启：weightMode=ic，按 IC 派生权重
+              - 默认：Barra 固定权重 */}
+          {scoreVersion === 'v2' && (
+            <button
+              onClick={() => setUseICWeight(prev => !prev)}
+              className={`col-span-1 text-xs px-2 py-1.5 rounded-lg font-medium transition-colors whitespace-nowrap ${useICWeight
+                ? 'bg-emerald-600 text-white hover:bg-emerald-500'
+                : 'bg-slate-800 text-slate-400 hover:text-slate-200'}`}
+              title={useICWeight
+                ? '已开启：8 大类权重按 IC 自动派生（|IC| × tanh(IR)）'
+                : '当前使用 Barra 默认权重（fixed 18/14/12/10/12/12/7/15）— 开启后用 IC 动态'}
+            >
+              🎯 IC 权重 {useICWeight ? '✓' : ''}
+            </button>
+          )}
+          {/* v2.1.1（2026-06-15）：长动量开关
+              - 关闭（默认）：momentum 用 20d 短动量（适合 5 日调仓）
+              - 开启：60d×0.3 + 120d×0.5 + 20d×0.2（Jegadeesh-Titman 经典长动量，月频策略优选） */}
+          {scoreVersion === 'v2' && (
+            <button
+              onClick={() => setUseLongMomentum(prev => !prev)}
+              className={`col-span-1 text-xs px-2 py-1.5 rounded-lg font-medium transition-colors whitespace-nowrap ${useLongMomentum
+                ? 'bg-indigo-600 text-white hover:bg-indigo-500'
+                : 'bg-slate-800 text-slate-400 hover:text-slate-200'}`}
+              title={useLongMomentum
+                ? '已开启：长动量（60d×0.3 + 120d×0.5 + 20d×0.2），月度调仓优选'
+                : '当前用 20d 短动量 — 开启后切换到长动量（需要 K线≥120 天）'}
+            >
+              📊 长动量 {useLongMomentum ? '✓' : ''}
+            </button>
+          )}
+          {/* v2.1.1（2026-06-15）：集中度评级徽章
+              - 分析完成后显示（A+/A/B/C/D）
+              - 点击展开行业分布详情 */}
+          {lastConcentration && scoreVersion === 'v2' && (
+            <button
+              onClick={() => setConcentrationPanelOpen(p => !p)}
+              className={`col-span-1 text-xs px-2 py-1.5 rounded-lg font-medium transition-colors whitespace-nowrap ${concentrationPanelOpen
+                ? 'bg-violet-700 text-white'
+                : lastConcentration.rating === 'A+' || lastConcentration.rating === 'A'
+                  ? 'bg-emerald-700/40 text-emerald-200 hover:bg-emerald-700/60 border border-emerald-500/40'
+                  : lastConcentration.rating === 'D'
+                    ? 'bg-red-700/40 text-red-200 hover:bg-red-700/60 border border-red-500/40'
+                    : 'bg-amber-700/40 text-amber-200 hover:bg-amber-700/60 border border-amber-500/40'
+              }`}
+              title={`集中度评级 ${lastConcentration.rating}（HHI=${lastConcentration.hhi.toFixed(3)} / 行业数 ${Object.keys(lastConcentration.industryDistribution).length}）— 点击查看详情`}
+            >
+              🛡️ 集中度 {lastConcentration.rating}
+            </button>
+          )}
+          {/* v2.1.1（2026-06-15）：Walk-Forward 验证按钮（紫色，紧贴"回测验证"位置）
+              - 区别：回测验证 = 真实日线回测（耗时 5-30 秒）；WF 验证 = 快速代理验证（< 1 秒）
+              - WF 用代理收益，精度 ~70%，但能秒级回答"当前权重是否可能有效" */}
+          {scoreVersion === 'v2' && (
+            <button
+              data-wizard-target="wf-verify-btn"
+              onClick={() => setWfPanelOpen(p => !p)}
+              disabled={loading || picks.length === 0}
+              className={`col-span-2 sm:col-span-1 text-xs px-2 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center justify-center gap-1 whitespace-nowrap ${wfPanelOpen
+                ? 'bg-gradient-to-r from-fuchsia-700 to-pink-700 text-white'
+                : 'bg-gradient-to-r from-fuchsia-600 to-pink-600 hover:from-fuchsia-500 hover:to-pink-500 text-white'
+              }`}
+              title="📈 WF 验证：用过去 120 日历史数据，按当前 8 大类权重生成 Top N 推荐，验证累计收益 / 夏普 / 胜率 / 最大回撤（代理收益，< 1 秒）"
+            >
+              <span>📈</span> {wfPanelOpen ? '收起 WF' : 'WF 验证'}
+            </button>
+          )}
+          {scoreVersion === 'v2' && (
+            <button
+              data-wizard-target="barra-btn"
+              onClick={() => setBarraPanelOpen(p => !p)}
+              disabled={loading || picks.length === 0}
+              className="text-xs px-2 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center gap-1 bg-amber-600 hover:bg-amber-500 text-white"
+            >🎯 {barraPanelOpen ? '收起 Barra' : 'Barra 优化'}</button>
+          )}
           <button
+            data-wizard-target="one-click-analyze"
             onClick={handleRunAnalysis}
             disabled={running || loading}
             className="col-span-1 text-xs px-3 py-1.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center justify-center gap-1 whitespace-nowrap"
@@ -3954,6 +4315,402 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
         </div>
       )}
 
+      {/* v2.1.1（2026-06-15）：集中度详情面板
+          - 行业分布 + HHI + 行业偏离基准
+          - 折叠状态：concentrationPanelOpen */}
+      {concentrationPanelOpen && lastConcentration && (
+        <div className="bg-gradient-to-br from-violet-950/40 to-purple-950/30 border border-violet-700/40 rounded-xl p-4 mb-4">
+          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <div className="flex items-center gap-2 text-sm text-violet-200 font-semibold">
+              <span>🛡️</span>
+              <span>行业集中度评估（Top {picks.length} 组合风险）</span>
+              <span className="text-[10px] text-slate-400 font-normal">
+                · 评级 {lastConcentration.rating} / 分数 {lastConcentration.diversityScore} / HHI={lastConcentration.hhi.toFixed(3)}
+              </span>
+            </div>
+            <button
+              onClick={() => setConcentrationPanelOpen(false)}
+              className="text-xs text-slate-400 hover:text-slate-200"
+            >收起 ✕</button>
+          </div>
+
+          {/* 行业分布可视化（横向条形图） */}
+          <div className="space-y-1.5 mb-3">
+            {Object.entries(lastConcentration.industryDistribution as Record<string, number>)
+              .sort((a, b) => b[1] - a[1])
+              .map(([industry, weight]) => {
+                const benchWeight = lastConcentration.industryDeviation[industry] !== undefined
+                  ? weight - lastConcentration.industryDeviation[industry]
+                  : 0;
+                const dev = lastConcentration.industryDeviation[industry] || 0;
+                const isOverLimit = Math.abs(dev) > 0.05;
+                return (
+                  <div key={industry} className="flex items-center gap-2 text-xs">
+                    <span className="w-16 text-slate-300 truncate" title={industry}>{industry}</span>
+                    <div className="flex-1 h-5 bg-slate-800 rounded relative overflow-hidden">
+                      {/* 行业权重条 */}
+                      <div
+                        className={`h-full ${isOverLimit ? 'bg-red-500/70' : 'bg-violet-500/70'}`}
+                        style={{ width: `${weight * 100}%` }}
+                      />
+                      {/* 基准线 */}
+                      {benchWeight > 0 && (
+                        <div
+                          className="absolute top-0 bottom-0 w-px bg-slate-400"
+                          style={{ left: `${benchWeight * 100}%` }}
+                          title={`基准 ${(benchWeight * 100).toFixed(1)}%`}
+                        />
+                      )}
+                    </div>
+                    <span className={`w-16 text-right font-mono ${isOverLimit ? 'text-red-300' : 'text-slate-300'}`}>
+                      {(weight * 100).toFixed(0)}%
+                      {dev !== 0 && (
+                        <span className="text-[10px] ml-1">
+                          ({dev > 0 ? '+' : ''}{(dev * 100).toFixed(1)}%)
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+          </div>
+
+          {/* 关键指标 */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+            <div className="bg-slate-900/60 rounded p-2">
+              <div className="text-slate-500">HHI</div>
+              <div className="text-violet-200 font-mono">{lastConcentration.hhi.toFixed(3)}</div>
+              <div className="text-[10px] text-slate-500">
+                {lastConcentration.hhiRating === 'diversified' ? '✅ 高度分散' :
+                 lastConcentration.hhiRating === 'moderate' ? '⚠️ 适度集中' : '🔴 过度集中'}
+              </div>
+            </div>
+            <div className="bg-slate-900/60 rounded p-2">
+              <div className="text-slate-500">单只权重</div>
+              <div className="text-violet-200 font-mono">{(lastConcentration.singleWeight * 100).toFixed(1)}%</div>
+              <div className="text-[10px] text-slate-500">{lastConcentration.singleOverLimit ? '⚠️ 超 15% 上限' : '✅ 等权分散'}</div>
+            </div>
+            <div className="bg-slate-900/60 rounded p-2">
+              <div className="text-slate-500">行业数</div>
+              <div className="text-violet-200 font-mono">{Object.keys(lastConcentration.industryDistribution).length}</div>
+              <div className="text-[10px] text-slate-500">{Object.keys(lastConcentration.industryDistribution).length >= 5 ? '✅ 充分分散' : '⚠️ < 5 个行业'}</div>
+            </div>
+            <div className="bg-slate-900/60 rounded p-2">
+              <div className="text-slate-500">超限行业</div>
+              <div className={`font-mono ${lastConcentration.industriesOverLimit.length > 0 ? 'text-red-300' : 'text-emerald-300'}`}>
+                {lastConcentration.industriesOverLimit.length}
+              </div>
+              <div className="text-[10px] text-slate-500">{lastConcentration.industriesOverLimit.length === 0 ? '✅ 全部合规' : '⚠️ 偏离 > 5%'}</div>
+            </div>
+          </div>
+
+          {/* 警告列表 */}
+          {lastConcentration.warnings && lastConcentration.warnings.length > 0 && (
+            <div className="mt-3 space-y-1 text-xs">
+              {lastConcentration.warnings.map((w: string, i: number) => (
+                <div key={i} className={`px-2 py-1 rounded ${w.includes('⚠️') ? 'bg-red-900/20 text-red-300' : 'bg-emerald-900/20 text-emerald-300'}`}>
+                  {w}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* diagnostics 里的 reverse 决策（v2.1.1 新增） */}
+          {lastDiagnostics?.percentileWarnings && (
+            <details className="mt-3 text-xs">
+              <summary className="cursor-pointer text-slate-400 hover:text-slate-200">
+                🔄 反向因子决策（{lastDiagnostics.percentileWarnings.filter((w: string) => w.includes('🔄') || w.includes('⬆️')).length} 项）
+              </summary>
+              <div className="mt-2 space-y-1 bg-slate-900/60 rounded p-2">
+                {lastDiagnostics.percentileWarnings
+                  .filter((w: string) => w.includes('🔄') || w.includes('⬆️'))
+                  .map((w: string, i: number) => (
+                    <div key={i} className="text-slate-300 font-mono text-[11px]">{w}</div>
+                  ))}
+              </div>
+            </details>
+          )}
+        </div>
+      )}
+
+      {/* v2.1.1（2026-06-15）：WF 验证面板
+          - 调 /api/stock/factor-analysis-v2?action=walkforward
+          - 显示评级 / 夏普 / 胜率 / 最大回撤 / 窗口明细 */}
+      {wfPanelOpen && (
+        <div className="bg-gradient-to-br from-fuchsia-950/40 to-pink-950/30 border border-fuchsia-700/40 rounded-xl p-4 mb-4">
+          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <div className="flex items-center gap-2 text-sm text-fuchsia-200 font-semibold">
+              <span>📈</span>
+              <span>Walk-Forward 验证（当前权重是否可能有效）</span>
+              <span className="text-[10px] text-slate-400 font-normal" id="wf-mode-label">
+                {/* v3.0（2026-06-15）：根据 snapshot 统计显示"真实/代理"模式 */}
+                {snapshotStats && snapshotStats.filled5d >= 5
+                  ? `· ✅ 真实收益模式（${snapshotStats.filled5d} 条 T+5 快照）`
+                  : snapshotStats && snapshotStats.total > 0
+                    ? `· ⚠️ 快照 ${snapshotStats.total} 条未达 T+5（待回填）`
+                    : '· 代理收益模式（精度 ~70% — 多分析几天积累 snapshot）'}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={runWalkForward}
+                disabled={wfLoading}
+                className="text-xs px-3 py-1 bg-fuchsia-700 hover:bg-fuchsia-600 text-white rounded font-medium disabled:opacity-50"
+              >
+                {wfLoading ? '验证中…' : '🚀 开始验证'}
+              </button>
+              {/* v2.1.1：导出历史（CSV + JSON） */}
+              <button
+                onClick={async () => {
+                  try {
+                    const { loadWalkforwardHistory, analyzeWalkforwardTrend } = await import('@/lib/quant/db/walkforward-persistence');
+                    const { exportReportsAll } = await import('@/lib/quant/db/walkforward-export');
+                    const config = { period, weightMode: (useICWeight ? 'ic' : 'default') as 'default' | 'ic' | 'manual', longMomentum: useLongMomentum };
+                    const history = await loadWalkforwardHistory(config);
+                    if (history.length === 0) {
+                      alert('暂无历史报告可导出');
+                      return;
+                    }
+                    const { csv, json } = exportReportsAll(history);
+                    // eslint-disable-next-line no-console
+                    console.log(`[export] 已导出 ${history.length} 条记录：${csv}, ${json}`);
+                  } catch (e) {
+                    console.error('[export] failed:', e);
+                    alert('导出失败：' + (e as Error).message);
+                  }
+                }}
+                disabled={wfLoading}
+                className="text-xs px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded font-medium disabled:opacity-50"
+                title="导出当前配置的全部历史报告（CSV + JSON）"
+              >
+                📥 导出
+              </button>
+              <button
+                onClick={() => setWfPanelOpen(false)}
+                className="text-xs text-slate-400 hover:text-slate-200"
+              >收起 ✕</button>
+            </div>
+          </div>
+
+          {!wfReport && !wfLoading && (
+            <div className="text-xs text-slate-500 text-center py-4">
+              点击「🚀 开始验证」用过去 120 日历史窗口，检验当前 8 大类权重生成的 Top N 是否能跑赢候选池均值
+            </div>
+          )}
+
+          {wfLoading && (
+            <div className="text-xs text-fuchsia-300 text-center py-4">
+              <div className="animate-pulse">📈 正在跑 Walk-Forward 验证（约 5-10 秒）…</div>
+            </div>
+          )}
+
+          {wfReport && !wfLoading && (
+            <div>
+              {/* 评级 + 关键指标 */}
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-3 text-xs">
+                <div className={`rounded p-2 ${
+                  wfReport.rating === 'A+' || wfReport.rating === 'A' ? 'bg-emerald-900/30 border border-emerald-700/40' :
+                  wfReport.rating === 'D' ? 'bg-red-900/30 border border-red-700/40' :
+                  'bg-slate-900/60'
+                }`}>
+                  <div className="text-slate-500">评级</div>
+                  <div className={`text-lg font-bold ${
+                    wfReport.rating === 'A+' || wfReport.rating === 'A' ? 'text-emerald-300' :
+                    wfReport.rating === 'D' ? 'text-red-300' :
+                    'text-amber-300'
+                  }`}>{wfReport.rating}</div>
+                  <div className="text-[10px] text-slate-500">{wfReport.robustnessScore}/100</div>
+                </div>
+                <div className="bg-slate-900/60 rounded p-2">
+                  <div className="text-slate-500">年化夏普</div>
+                  <div className={`font-mono ${wfReport.annualizedSharpe > 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                    {wfReport.annualizedSharpe.toFixed(2)}
+                  </div>
+                </div>
+                <div className="bg-slate-900/60 rounded p-2">
+                  <div className="text-slate-500">胜率</div>
+                  <div className="text-fuchsia-200 font-mono">{(wfReport.winRate * 100).toFixed(0)}%</div>
+                </div>
+                <div className="bg-slate-900/60 rounded p-2">
+                  <div className="text-slate-500">超额胜率</div>
+                  <div className={`font-mono ${wfReport.excessWinRate > 0.5 ? 'text-emerald-300' : 'text-amber-300'}`}>
+                    {(wfReport.excessWinRate * 100).toFixed(0)}%
+                  </div>
+                </div>
+                <div className="bg-slate-900/60 rounded p-2">
+                  <div className="text-slate-500">最大回撤</div>
+                  <div className="text-red-300 font-mono">{wfReport.maxDrawdown.toFixed(1)}%</div>
+                </div>
+              </div>
+
+              {/* 一句话诊断 */}
+              <div className={`text-xs px-3 py-2 rounded mb-3 ${
+                wfReport.rating === 'A+' || wfReport.rating === 'A' ? 'bg-emerald-900/20 text-emerald-200' :
+                wfReport.rating === 'D' ? 'bg-red-900/20 text-red-200' :
+                'bg-slate-900/60 text-slate-300'
+              }`}>
+                💡 {wfReport.diagnosis}
+              </div>
+
+              {/* v2.1.1：历史趋势对比（IDB walkforwardReports） */}
+              {wfTrend && wfTrend.recentSeries.length > 0 && (
+                <div className={`mb-3 px-3 py-2 rounded text-xs ${
+                  wfTrend.alert ? 'bg-red-900/20 border border-red-700/40' : 'bg-slate-900/60'
+                }`}>
+                  <div className="flex items-center gap-3 mb-2 flex-wrap">
+                    <span className="text-slate-400">📈 历史趋势（最近 {wfTrend.recentSeries.length} 次）：</span>
+                    <span className={`font-mono ${
+                      wfTrend.trend === 'improving' ? 'text-emerald-300' :
+                      wfTrend.trend === 'declining' ? 'text-red-300' :
+                      wfTrend.trend === 'insufficient' ? 'text-slate-500' :
+                      'text-slate-300'
+                    }`}>
+                      {wfTrend.trend === 'improving' ? '↗ 改善' :
+                       wfTrend.trend === 'declining' ? '↘ 下滑' :
+                       wfTrend.trend === 'insufficient' ? '— 数据不足' : '→ 稳定'}
+                    </span>
+                    <span className="text-slate-400">
+                      平均评分 <span className="text-fuchsia-200 font-mono">{wfTrend.avgScore}</span>
+                    </span>
+                    <span className="text-slate-400">
+                      平均夏普 <span className="text-fuchsia-200 font-mono">{wfTrend.avgSharpe}</span>
+                    </span>
+                    {wfTrend.consecutiveBad > 0 && (
+                      <span className={`font-mono ${wfTrend.consecutiveBad >= 3 ? 'text-red-300' : 'text-amber-300'}`}>
+                        连续 C/D × {wfTrend.consecutiveBad}
+                      </span>
+                    )}
+                  </div>
+                  {/* v2.1.1（2026-06-15）：Sparkline 折线图（替代原柱状图）*/}
+                  {SparklineComp && (
+                    <div className="bg-slate-900/60 rounded p-2">
+                      <SparklineComp data={wfTrend.recentSeries} width={320} height={70} />
+                    </div>
+                  )}
+                  {wfTrend.alert && (
+                    <div className="mt-2 text-red-300">{wfTrend.alert}</div>
+                  )}
+                </div>
+              )}
+
+              {/* 累计收益摘要 */}
+              <div className="grid grid-cols-3 gap-2 text-xs mb-3">
+                <div className="bg-slate-900/60 rounded p-2">
+                  <div className="text-slate-500">窗口数</div>
+                  <div className="text-fuchsia-200 font-mono">{wfReport.windowCount}</div>
+                </div>
+                <div className="bg-slate-900/60 rounded p-2">
+                  <div className="text-slate-500">累计收益</div>
+                  <div className={`font-mono ${wfReport.totalReturn > 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                    {wfReport.totalReturn.toFixed(2)}%
+                  </div>
+                </div>
+                <div className="bg-slate-900/60 rounded p-2">
+                  <div className="text-slate-500">平均超额</div>
+                  <div className={`font-mono ${wfReport.avgExcessReturn > 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                    {wfReport.avgExcessReturn.toFixed(2)}%
+                  </div>
+                </div>
+              </div>
+
+              {/* 窗口明细（可折叠） */}
+              {wfReport.windows && wfReport.windows.length > 0 && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-slate-400 hover:text-slate-200 mb-2">
+                    📊 窗口明细（{wfReport.windows.length} 个）
+                  </summary>
+                  <div className="bg-slate-900/60 rounded p-2 space-y-1 max-h-48 overflow-y-auto">
+                    {wfReport.windows.map((w: any, i: number) => (
+                      <div key={i} className="flex items-center gap-2 font-mono text-[11px]">
+                        <span className="w-12 text-slate-500">#{w.windowIndex + 1}</span>
+                        <span className="w-16 text-slate-400">{w.rebalanceDate}</span>
+                        <span className={`w-16 text-right ${w.portfolioReturn > 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                          {w.portfolioReturn > 0 ? '+' : ''}{w.portfolioReturn.toFixed(2)}%
+                        </span>
+                        <span className={`w-16 text-right ${w.excessReturn > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                          超额 {w.excessReturn > 0 ? '+' : ''}{w.excessReturn.toFixed(2)}%
+                        </span>
+                        <span className="text-slate-500 truncate" title={w.picks.join(', ')}>
+                          {w.picks.slice(0, 3).join(', ')}{w.picks.length > 3 ? '…' : ''}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+
+              {wfReport.warnings && wfReport.warnings.length > 0 && (
+                <div className="mt-2 text-xs text-amber-400">
+                  {wfReport.warnings.map((w: string, i: number) => (
+                    <div key={i}>⚠️ {w}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {barraPanelOpen && barraDiag && barraWeights && (
+        <div className="bg-gradient-to-br from-amber-950/40 to-orange-950/30 border border-amber-700/40 rounded-xl p-4 mb-4">
+          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <h3 className="text-sm text-amber-200 font-semibold">
+              🎯 Barra 风险模型 + 组合优化（从分数到权重）
+              <span className="text-[10px] text-slate-400 font-normal ml-2">· {barraWeights.length} 只票</span>
+            </h3>
+            <button onClick={() => setBarraPanelOpen(false)} className="text-xs text-slate-400 hover:text-slate-200">收起 ✕</button>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3 text-xs">
+            <div className="bg-slate-800/60 rounded p-2">
+              <div className="text-slate-400">信息比率 IR</div>
+              <div className={`text-lg font-bold ${barraDiag.informationRatio > 1.5 ? 'text-emerald-300' : barraDiag.informationRatio < 0.5 ? 'text-red-300' : 'text-amber-300'}`}>
+                {barraDiag.informationRatio.toFixed(2)}
+              </div>
+            </div>
+            <div className="bg-slate-800/60 rounded p-2">
+              <div className="text-slate-400">组合 α</div>
+              <div className="text-amber-200 font-mono">{barraDiag.portfolioAlpha.toFixed(3)}</div>
+            </div>
+            <div className="bg-slate-800/60 rounded p-2">
+              <div className="text-slate-400">组合 σ</div>
+              <div className="text-amber-200 font-mono">{(barraDiag.portfolioRisk * 100).toFixed(1)}%</div>
+            </div>
+            <div className="bg-slate-800/60 rounded p-2">
+              <div className="text-slate-400">多样性比率</div>
+              <div className="text-amber-200 font-mono">{barraDiag.diversificationRatio.toFixed(2)}</div>
+            </div>
+          </div>
+          <div className="bg-slate-900/60 rounded p-2 max-h-72 overflow-y-auto">
+            <div className="grid grid-cols-12 text-[10px] text-slate-500 px-2 py-1 border-b border-slate-700/40">
+              <span className="col-span-2">代码</span>
+              <span className="col-span-2">行业</span>
+              <span className="col-span-3 text-right">权重</span>
+              <span className="col-span-2 text-right">α (Z)</span>
+              <span className="col-span-1 text-right">σ</span>
+              <span className="col-span-2 text-center">条形图</span>
+            </div>
+            {barraWeights.slice(0, 15).map((w: any, i: number) => (
+              <div key={i} className="grid grid-cols-12 items-center text-xs px-2 py-1 hover:bg-slate-800/40">
+                <span className="col-span-2 font-mono text-slate-300">{w.code}</span>
+                <span className="col-span-2 text-slate-400 truncate" title={w.industry}>{w.industry || '—'}</span>
+                <span className={`col-span-3 text-right font-mono ${w.weight > 0.05 ? 'text-amber-200' : 'text-slate-300'}`}>
+                  {(w.weight * 100).toFixed(2)}%
+                </span>
+                <span className={`col-span-2 text-right font-mono ${(w.alphaZ || 0) > 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                  {(w.alphaZ || 0) >= 0 ? '+' : ''}{(w.alphaZ || 0).toFixed(2)}
+                </span>
+                <span className="col-span-1 text-right text-slate-400 font-mono">{(w.risk * 100).toFixed(0)}%</span>
+                <span className="col-span-2 flex items-center justify-center">
+                  <div className="w-full h-2 bg-slate-800 rounded">
+                    <div className="h-full bg-gradient-to-r from-amber-500 to-orange-500 rounded" style={{ width: `${Math.min(100, w.weight * 100 / 0.15 * 100)}%` }} />
+                  </div>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {running ? (
         <div className="bg-slate-900 border border-cyan-700/50 rounded-xl p-8 text-center">
           <div className="text-cyan-400 text-sm font-medium mb-2">⚡ {period === '5d' ? '5日' : '20日'} 因子分析中</div>
@@ -4019,177 +4776,7 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
   );
 }
 
-// ==================== ②b 智能选股 (lite 速览) ====================
-// 顶部"今日推荐"是综合评分 Top 10 + 单击加入交易池
-// ②b 是 lite 智能选股入口：综合 Top 5 + 一键追加到交易池 + 跳专业模式做深度筛选
-function LiteScreenerSection({ onAddToSimulator }: { onAddToSimulator: (codes: string[]) => void }) {
-  const [picks, setPicks] = useState<ScreenerLiteRow[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [adding, setAdding] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchPicks = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch('/api/stock/screener?scoreSort=true&limit=5');
-      const json = await res.json();
-      if (json.success && json.stocks) {
-        setPicks(json.stocks.slice(0, 5));
-      } else {
-        setError(json.error || '暂无数据');
-      }
-    } catch (e: any) {
-      setError(e?.message || '网络错误');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { fetchPicks(); }, [fetchPicks]);
-
-  const handleAddToSimulator = async () => {
-    if (adding || picks.length === 0) return;
-    setAdding(true);
-    try {
-      const res = await fetch('/api/simulator', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'addCodes',
-          codes: picks.map(p => p.code),
-          strategyType: 'factor',
-          factorScores: Object.fromEntries(picks.map(p => [p.code, p.compositeScore ?? 0])),
-        }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        onAddToSimulator(picks.map(p => p.code));
-        // 通知 SimulatorSnapshot 立即刷新（CustomEvent 总线模式，与 quant:watchlist-changed 一致）
-        window.dispatchEvent(new CustomEvent('quant:simulator-changed', { detail: { codes: picks.map(p => p.code), source: 'lite-screener' } }));
-        toast.success(`🎯 已推入交易池 ${picks.length} 只 · 跳到「④ 模拟交易」查看`, {
-          description: '已在策略池中，可手动开启自动驾驶',
-          duration: 4000,
-          action: {
-            label: '查看',
-            onClick: () => {
-              document.getElementById('section-simulator')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            },
-          },
-        });
-        // 1.2s 后自动滚动到 ④ 区（让用户感知联动已生效）
-        setTimeout(() => {
-          document.getElementById('section-simulator')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }, 1200);
-      } else {
-        toast.error('追加失败: ' + (json.error || '未知错误'));
-      }
-    } catch (e: any) {
-      toast.error('网络错误: ' + e?.message);
-    } finally {
-      setAdding(false);
-    }
-  };
-
-  return (
-    <section className="mb-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
-        <div className="min-w-0">
-          <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
-            🎯 智能选股
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-900/40 text-emerald-300 border border-emerald-800/60">
-              多因子综合评分
-            </span>
-          </h2>
-          <p className="text-xs text-slate-500 mt-0.5">基于 v2 多因子模型（8 大类 + 中性化）的 Top 5 · 一键推入交易池</p>
-        </div>
-        <div className="flex items-center gap-2 w-fit">
-          <button
-            onClick={fetchPicks}
-            disabled={loading}
-            className="text-xs px-3 py-1 rounded border border-slate-700 hover:border-slate-500 text-slate-300 disabled:opacity-50 whitespace-nowrap"
-          >
-            {loading ? '⏳ 刷新中' : '🔄 刷新'}
-          </button>
-          <button
-            onClick={handleAddToSimulator}
-            disabled={adding || picks.length === 0}
-            className="text-xs px-3 py-1.5 rounded bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white font-medium disabled:opacity-50 whitespace-nowrap"
-            title="🚀 一键推入交易池：把这 5 只股票写入模拟交易策略池（不会自动开启自动驾驶，仅作为候选）· 成功后跳到 ④ 区查看"
-          >
-            {adding ? '追加中…' : '🚀 一键推入交易池'}
-          </button>
-          <Link
-            href="/quant/pro#screener"
-            className="text-xs px-3 py-1 rounded border border-slate-700 hover:border-cyan-500 hover:text-cyan-400 text-slate-300 whitespace-nowrap"
-          >
-            深度筛选 →
-          </Link>
-        </div>
-      </div>
-
-      {error && (
-        <div className="bg-rose-900/20 border border-rose-800 rounded-xl p-4 text-sm text-rose-300">
-          ⚠️ {error} · <button onClick={fetchPicks} className="underline">重试</button>
-        </div>
-      )}
-
-      {!error && (
-        <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-          {loading && picks.length === 0 ? (
-            <div className="p-8 text-center text-slate-500 text-sm">加载中…</div>
-          ) : picks.length === 0 ? (
-            <div className="p-8 text-center text-slate-500 text-sm">暂无数据</div>
-          ) : (
-            <div className="divide-y divide-slate-800">
-              {picks.map((s, i) => (
-                <div key={s.code} className="px-4 py-3 flex items-center gap-3 hover:bg-slate-800/30 transition-colors">
-                  {/* 排名徽章 */}
-                  <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
-                    i === 0 ? 'bg-amber-500 text-slate-900' :
-                    i === 1 ? 'bg-slate-400 text-slate-900' :
-                    i === 2 ? 'bg-orange-700 text-amber-100' :
-                    'bg-slate-800 text-slate-400'
-                  }`}>
-                    {i + 1}
-                  </div>
-                  {/* 股票名 + 代码 */}
-                  <div className="min-w-0 flex-1">
-                    <div className="text-white font-semibold text-sm truncate">{s.name}</div>
-                    <div className="text-xs text-slate-500 font-mono">{s.code}</div>
-                  </div>
-                  {/* 价格 + 涨跌 */}
-                  <div className="text-right shrink-0">
-                    <div className="text-white text-sm font-mono">¥{s.price?.toFixed(2) || '-'}</div>
-                    <div className={`text-xs font-mono ${(s.changePercent ?? 0) >= 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
-                      {(s.changePercent ?? 0) >= 0 ? '+' : ''}{(s.changePercent ?? 0).toFixed(2)}%
-                    </div>
-                  </div>
-                  {/* 综合评分（带进度条） */}
-                  <div className="w-24 shrink-0 hidden sm:block">
-                    <div className="text-[10px] text-slate-500 mb-0.5">综合 {s.compositeScore?.toFixed(0) ?? '-'}</div>
-                    <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full ${
-                          (s.compositeScore ?? 0) >= 80 ? 'bg-gradient-to-r from-amber-500 to-orange-500' :
-                          (s.compositeScore ?? 0) >= 60 ? 'bg-gradient-to-r from-cyan-500 to-blue-500' :
-                          'bg-gradient-to-r from-slate-500 to-slate-400'
-                        }`}
-                        style={{ width: `${Math.min(100, s.compositeScore ?? 0)}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </section>
-  );
-}
-
-// ==================== ④ 我的盯盘 ====================
+// ==================== ③ 我的盯盘 ====================
 
 function WatchlistMonitor({ onGoPro, onShowDetail }: { onGoPro: (tab: string) => void; onShowDetail: (stock: { code: string; name: string }) => void }) {
   const [items, setItems] = useState<WatchlistQuote[]>([]);
@@ -4310,8 +4897,8 @@ function WatchlistMonitor({ onGoPro, onShowDetail }: { onGoPro: (tab: string) =>
 
   if (!loading && items.length === 0) {
     return (
-      <section className="mb-6">
-        <h2 className="text-lg font-bold text-slate-100 mb-3">④ 我的盯盘</h2>
+      <section className="mb-6" data-section-target="watchlist">
+        <h2 className="text-lg font-bold text-slate-100 mb-3">③ 我的盯盘</h2>
         <div className="bg-slate-900 border border-slate-800 border-dashed rounded-xl p-8 text-center">
           <div className="text-3xl mb-2">📡</div>
           <p className="text-slate-400 text-sm">还没有自选股</p>
@@ -4322,10 +4909,10 @@ function WatchlistMonitor({ onGoPro, onShowDetail }: { onGoPro: (tab: string) =>
   }
 
   return (
-    <section className="mb-6">
+    <section className="mb-6" data-section-target="watchlist">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
         <div className="min-w-0">
-          <h2 className="text-lg font-bold text-slate-100">④ 我的盯盘</h2>
+          <h2 className="text-lg font-bold text-slate-100">③ 我的盯盘</h2>
           <p className="text-xs text-slate-500 mt-0.5">{items.length} 只自选股 · 每 10s 自动刷新</p>
         </div>
         <div className="flex items-center gap-2 w-fit">
@@ -4470,6 +5057,12 @@ function loadRiskSettings(): RiskSettings {
 function RiskSettingsPanel() {
   const [settings, setSettings] = useState<RiskSettings>(loadRiskSettings);
   const [saved, setSaved] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'ok' | 'error'>('idle');
+  const [lastChanges, setLastChanges] = useState<string[]>([]);
+
+  // 防抖 refs：避免用户连续 input 时每个字符都打一次 API
+  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSentRef = useRef<RiskSettings | null>(null);
 
   const update = (patch: Partial<RiskSettings>) => {
     const next = { ...settings, ...patch };
@@ -4477,14 +5070,76 @@ function RiskSettingsPanel() {
     localStorage.setItem('quant_risk_settings', JSON.stringify(next));
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
+
+    // 防抖同步到 live-simulator（300ms 内合并所有改动，只发一次请求）
+    if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+    syncTimerRef.current = setTimeout(() => {
+      // 跳过与上次完全一致的请求（防御性 + 节流）
+      if (
+        lastSentRef.current &&
+        lastSentRef.current.stopLossPct === next.stopLossPct &&
+        lastSentRef.current.takeProfitPct === next.takeProfitPct &&
+        lastSentRef.current.maxPositionPct === next.maxPositionPct &&
+        lastSentRef.current.maxTotalPositions === next.maxTotalPositions &&
+        lastSentRef.current.enabled === next.enabled
+      ) {
+        return;
+      }
+      setSyncStatus('syncing');
+      fetch('/api/simulator', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'updateRisk',
+          stopLossPct: next.stopLossPct,
+          takeProfitPct: next.takeProfitPct,
+          maxPositionPct: next.maxPositionPct,
+          maxTotalPositions: next.maxTotalPositions,
+          enabled: next.enabled,
+        }),
+      })
+        .then(r => r.json())
+        .then(json => {
+          if (json.success) {
+            lastSentRef.current = next;
+            setLastChanges(json.data?.changes || []);
+            setSyncStatus('ok');
+            setTimeout(() => setSyncStatus('idle'), 2500);
+          } else {
+            console.warn('[RiskSettings] sync failed:', json.error);
+            setSyncStatus('error');
+            setTimeout(() => setSyncStatus('idle'), 3000);
+          }
+        })
+        .catch(err => {
+          console.warn('[RiskSettings] sync network error:', err);
+          setSyncStatus('error');
+          setTimeout(() => setSyncStatus('idle'), 3000);
+        });
+    }, 300);
   };
+
+  // 组件卸载时清理 timer
+  useEffect(() => {
+    return () => { if (syncTimerRef.current) clearTimeout(syncTimerRef.current); };
+  }, []);
 
   return (
     <section className="mb-6">
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
           ⏰ 风险设置
           {saved && <span className="text-[10px] text-emerald-400 animate-pulse">✓ 已保存</span>}
+          {syncStatus === 'syncing' && <span className="text-[10px] text-cyan-400 animate-pulse">⏳ 同步引擎中…</span>}
+          {syncStatus === 'ok' && (
+            <span
+              className="text-[10px] text-emerald-400"
+              title={lastChanges.join(' · ')}
+            >
+              ✅ 引擎已生效{lastChanges.length > 0 && `（${lastChanges.length}项）`}
+            </span>
+          )}
+          {syncStatus === 'error' && <span className="text-[10px] text-rose-400 animate-pulse">⚠️ 引擎同步失败</span>}
         </h2>
         <div className="flex items-center gap-2">
           <label className="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer">
@@ -4565,8 +5220,11 @@ function RiskSettingsPanel() {
           <p className="text-[10px] text-slate-600 mt-0.5">同时持仓最多</p>
         </div>
       </div>
-      <p className="text-[10px] text-slate-600 mt-2">
-        💡 提示：风控仅作记录与提醒，模拟器当前版本由策略内置风控（见 RiskEngine）。本设置供专业模式同步使用。
+      <p className="text-[10px] text-slate-500 mt-2 leading-relaxed">
+        💡 提示：风控已实时同步到 live-simulator 引擎——下次 ⏰ 启动/重启自动驾驶时立即生效，无需重启引擎。<br />
+        <span className="text-slate-600">
+          （影响 RiskEngine.StopLossRule + StopProfitRule + PositionLimitRule + AdvancedPositionManager.stopConfig）
+        </span>
       </p>
     </section>
   );
@@ -4884,12 +5542,134 @@ function StatRow({ label, value, positive }: { label: string; value: string; pos
   );
 }
 
-// ==================== ⑤ 模拟交易 ====================
+// ==================== ④ 模拟交易 ====================
+
+/**
+ * 30 天净值迷你 sparkline（账户卡片内）
+ * ──────────────────────────────────────────────────────────────────
+ * 纯 SVG 自渲染，零依赖。60×20 紧凑布局，A 股配色：
+ *   - 涨（净值为正）：rose
+ *   - 跌（净值为负）：emerald
+ * 数据 ≥ 2 个点才渲染。
+ */
+function EquitySparkline({ points }: { points: number[] }) {
+  if (!points || points.length < 2) return null;
+  const W = 240, H = 40;
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const range = max - min || 1;
+  const step = W / (points.length - 1);
+  const path = points.map((p, i) => {
+    const x = i * step;
+    const y = H - 4 - ((p - min) / range) * (H - 8);
+    return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  const isUp = points[points.length - 1] >= points[0];
+  const stroke = isUp ? '#fb7185' : '#34d399';
+  return (
+    <svg width={W} height={H} className="w-full h-10">
+      <path d={path} fill="none" stroke={stroke} strokeWidth="1.5" strokeLinejoin="round" />
+      {/* 起止圆点 */}
+      <circle cx={0} cy={H - 4 - ((points[0] - min) / range) * (H - 8)} r="2" fill={stroke} />
+      <circle cx={W} cy={H - 4 - ((points[points.length - 1] - min) / range) * (H - 8)} r="3" fill={stroke} />
+    </svg>
+  );
+}
+
+/**
+ * 导出账户快照为 CSV 文件
+ * ──────────────────────────────────────────────────────────────────
+ * 包含 2 个 section：
+ *   1. 持仓明细（代码/名称/数量/成本价/当前价/市值/浮盈/盈亏率）
+ *   2. 净值曲线（YYYY-MM-DD, equity）
+ * 浏览器原生 Blob + a.download，零依赖。
+ */
+function exportAccountCsv(
+  account: AccountSnapshot | null,
+  equitySpark: { points: number[]; totalReturn: number } | null,
+) {
+  if (!account) return;
+  const lines: string[] = [];
+  const today = new Date().toISOString().slice(0, 10);
+
+  // Section 1: 持仓明细
+  lines.push(`# 账户快照 - ${today}`);
+  lines.push(`# 总资产,${account.totalAssets.toFixed(2)}`);
+  lines.push(`# 现金,${(account.balance ?? 0).toFixed(2)}`);
+  lines.push(`# 策略池,${account.tradingCodes?.length ?? 0} 只`);
+  lines.push('');
+  lines.push('=== 持仓明细 ===');
+  lines.push('代码,名称,数量,成本价,当前价,市值,浮盈,盈亏率%');
+  for (const p of account.positions || []) {
+    const pnlPct = p.avgCost > 0 ? ((p.currentPrice - p.avgCost) / p.avgCost * 100).toFixed(2) : '0.00';
+    lines.push([
+      p.code,
+      p.name || '',
+      p.volume,
+      p.avgCost.toFixed(2),
+      p.currentPrice.toFixed(2),
+      p.marketValue.toFixed(2),
+      p.unrealizedPnL.toFixed(2),
+      pnlPct,
+    ].join(','));
+  }
+
+  // Section 2: 净值曲线（从 IDB equityPoints 拉，按日期排序）
+  lines.push('');
+  lines.push('=== 净值曲线（30 天） ===');
+  lines.push('日期,净值');
+  // 我们只拿到 sparkline 的数字数组，日期用相对偏移近似（最近 N 天）
+  if (equitySpark && equitySpark.points.length > 0) {
+    const pts = equitySpark.points;
+    pts.forEach((eq, i) => {
+      // 日期从 (N-1) 天前倒推到今天
+      const d = new Date();
+      d.setDate(d.getDate() - (pts.length - 1 - i));
+      const dateStr = d.toISOString().slice(0, 10);
+      lines.push(`${dateStr},${eq.toFixed(2)}`);
+    });
+  }
+
+  const csv = '\ufeff' + lines.join('\n'); // BOM 兼容 Excel 中文
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `账户快照_${today}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 function SimulatorSnapshot() {
   const [account, setAccount] = useState<AccountSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState(false);
+
+  // ============ 30 天净值迷你 sparkline ============
+  // 从 IDB equityPoints 读最近 30 天 → 在账户卡片内显示迷你曲线
+  const [equitySpark, setEquitySpark] = useState<{ points: number[]; totalReturn: number } | null>(null);
+  const loadEquitySpark = useCallback(async () => {
+    try {
+      const { db } = await import('@/lib/quant/db/database');
+      const table = db.equityPoints;
+      if (!table) return;
+      const rows = await table.toArray();
+      if (rows.length === 0) return;
+      // 按日期聚合（同一天取最后一个）
+      const byDate: Record<string, number> = {};
+      rows.forEach(r => { byDate[r.date] = r.equity; });
+      const sorted = Object.entries(byDate)
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .slice(-30)
+        .map(([_, eq]) => eq);
+      if (sorted.length >= 2) {
+        const totalReturn = ((sorted[sorted.length - 1] - sorted[0]) / sorted[0]) * 100;
+        setEquitySpark({ points: sorted, totalReturn });
+      }
+    } catch { /* ignore */ }
+  }, []);
 
   // ============ 资金变动闪烁动画 ============
   // 跟踪总资产、总盈亏的变化 → 变化时显示闪烁高亮（1.2s）
@@ -4955,18 +5735,73 @@ function SimulatorSnapshot() {
 
   useEffect(() => {
     refresh();
+    loadEquitySpark();
     const id = setInterval(refresh, 10_000);
     return () => clearInterval(id);
-  }, [refresh]);
+  }, [refresh, loadEquitySpark]);
 
-  // 监听 ②/②b 推入交易池事件，立即刷新（不等 10s 轮询）
+  // 监听 ② 推入交易池事件，立即刷新（不等 10s 轮询）
   useEffect(() => {
     const handler = () => { refresh(); };
     window.addEventListener('quant:simulator-changed', handler);
     return () => window.removeEventListener('quant:simulator-changed', handler);
   }, [refresh]);
 
-  const handleToggle = async (action: 'autopilot' | 'stop' | 'reset', enabled?: boolean) => {
+  // ============ 持仓行手动下单（加仓/减仓/清仓）============
+  // per-row acting 状态，避免点 A 时 B 也不能点
+  const [actingByCode, setActingByCode] = useState<Record<string, boolean>>({});
+  const submitOrder = useCallback(async (code: string, direction: 'long' | 'short', volume: number) => {
+    if (actingByCode[code]) return;
+    if (volume < 100 || volume % 100 !== 0) {
+      toast.error('股数必须是 100 的整数倍（A 股 1 手 = 100 股）');
+      return;
+    }
+    if (volume > 1_000_000) {
+      toast.error('单次下单最多 10000 手（100 万股）');
+      return;
+    }
+    // 减仓风控：不可超过当前持仓
+    if (direction === 'short') {
+      const pos = account?.positions.find(p => p.code === code);
+      if (!pos || pos.volume < volume) {
+        toast.error(`持仓不足：当前 ${pos?.volume ?? 0} 股，无法卖出 ${volume} 股`);
+        return;
+      }
+    }
+    setActingByCode(prev => ({ ...prev, [code]: true }));
+    try {
+      const res = await fetch('/api/simulator', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'order', code, direction, volume, type: 'market' }),
+      });
+      const json = await res.json();
+      const order = json?.data?.order;
+      const pos = account?.positions.find(p => p.code === code);
+      const name = pos?.name || code;
+      if (json.success && order?.status === 'filled') {
+        const filledPrice = order.price || pos?.currentPrice || 0;
+        const amount = (filledPrice * volume).toFixed(0);
+        toast.success(
+          `${direction === 'long' ? '🟢 买入' : '🔴 卖出'} ${name} ${volume} 股 @ ¥${filledPrice.toFixed(2)}（¥${amount}）`,
+          { duration: 2200 }
+        );
+        // 广播让 PnL 闪光、订单流、WatchlistMonitor 全部立即刷新
+        window.dispatchEvent(new CustomEvent('quant:simulator-changed', { detail: { code, direction, volume, source: 'position-row' } }));
+        setTimeout(refresh, 500);
+      } else if (order?.status === 'rejected') {
+        toast.error('下单被拒: ' + (order.reason || '风控拦截'));
+      } else {
+        toast.error('下单失败: ' + (json.error || '未知错误'));
+      }
+    } catch (e: any) {
+      toast.error('网络错误: ' + e?.message);
+    } finally {
+      setActingByCode(prev => ({ ...prev, [code]: false }));
+    }
+  }, [actingByCode, account?.positions, refresh]);
+
+  const handleToggle = async (action: 'start' | 'autopilot' | 'stop' | 'reset', enabled?: boolean) => {
     if (acting) return;
     // 开启自动驾驶：弹风险确认
     if (action === 'autopilot' && enabled === true) {
@@ -4988,6 +5823,17 @@ function SimulatorSnapshot() {
     try {
       const body: any = { action };
       if (action === 'autopilot') body.enabled = enabled;
+      if (action === 'start') {
+        // 冷启动：start action 强制要 codes（API 400），策略池为空则拒绝并提示
+        if (!account?.tradingCodes || account.tradingCodes.length === 0) {
+          setActing(false);
+          alert('⚠️ 策略池为空\n\n请先到上方「② 今日推荐」点击「🤖 启自驾并加入」添加股票后，再点此启动引擎。');
+          return;
+        }
+        // 有股票：透传 codes + 默认 factor 策略
+        body.codes = account.tradingCodes.slice(0, 10);
+        body.strategyType = 'factor';
+      }
       if (action === 'reset') body.initialCash = 1000000;
       await fetch('/api/simulator', {
         method: 'POST',
@@ -5002,9 +5848,9 @@ function SimulatorSnapshot() {
 
   if (loading) {
     return (
-      <section className="mb-6">
+      <section className="mb-6" data-section-target="trading">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-bold text-slate-100">⑤ 模拟交易</h2>
+          <h2 className="text-lg font-bold text-slate-100">④ 模拟交易</h2>
           <SimulatorBackupPanel onChanged={refresh} />
         </div>
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-500 text-sm">加载账户…</div>
@@ -5016,7 +5862,7 @@ function SimulatorSnapshot() {
   const totalPnl = account ? account.totalAssets - 1_000_000 : 0;
 
   return (
-    // id 锚点：②/②b 推入交易池后滚动到此处（scroll-mt-20 留出 TopBar 高度）
+    // id 锚点：② 推入交易池后滚动到此处（scroll-mt-20 留出 TopBar 高度）
     <section id="section-simulator" className="mb-6 scroll-mt-20">
       <div className="flex items-center justify-between mb-3">
         <div>
@@ -5065,12 +5911,16 @@ function SimulatorSnapshot() {
               ⏹ 停止
             </button>
           ) : (
-            <Link
-              href="/quant/pro#simulator"
-              className="text-sm px-3 py-1.5 bg-green-600 hover:bg-green-500 text-white rounded"
+            <button
+              onClick={() => handleToggle('start')}
+              disabled={acting}
+              className="text-sm px-3 py-1.5 bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white rounded flex items-center gap-1"
+              title={account?.tradingCodes && account.tradingCodes.length > 0
+                ? `启动引擎，策略池 ${account.tradingCodes.length} 只将自动监控信号`
+                : '启动引擎需要先在「② 今日推荐」添加股票'}
             >
-              ▶ 启动引擎（专业模式）
-            </Link>
+              ▶ 启动引擎
+            </button>
           )}
         </div>
       </div>
@@ -5113,11 +5963,34 @@ function SimulatorSnapshot() {
             <div className="flex justify-between"><span className="text-slate-500">持仓</span><span className="text-white">{account?.positions.length ?? 0} 只</span></div>
             <div className="flex justify-between"><span className="text-slate-500">策略池</span><span className="text-white">{account?.tradingCodes.length ?? 0} 只</span></div>
           </div>
+          {/* 30 天净值迷你 sparkline（从 IDB equityPoints 读） */}
+          {equitySpark && equitySpark.points.length >= 2 && (
+            <div className="mt-3 pt-3 border-t border-slate-800">
+              <div className="flex items-center justify-between text-[10px] text-slate-500 mb-1">
+                <span>📈 30 天净值</span>
+                <span className={equitySpark.totalReturn >= 0 ? 'text-rose-400' : 'text-emerald-400'}>
+                  {equitySpark.totalReturn >= 0 ? '+' : ''}{equitySpark.totalReturn.toFixed(2)}%
+                </span>
+              </div>
+              <EquitySparkline points={equitySpark.points} />
+            </div>
+          )}
+          {/* 一键导出 CSV 按钮 */}
+          <div className="mt-3 pt-3 border-t border-slate-800 flex gap-2">
+            <button
+              onClick={() => exportAccountCsv(account, equitySpark)}
+              disabled={!account}
+              className="text-[10px] px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors flex items-center gap-1 disabled:opacity-40"
+              title="导出当前持仓 + 30天净值曲线为 CSV 文件"
+            >
+              📤 导出 CSV
+            </button>
+          </div>
         </div>
 
         {/* 持仓 */}
         <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-4">
-          <div className="flex items-center justify-between mb-3">
+          <div data-wizard-target="position-row" className="flex items-center justify-between mb-3">
             <h3 className="text-xs text-slate-500">当前持仓（{account?.positions.length ?? 0}）</h3>
             {account && account.positions.length > 0 && (
               <div className="flex items-center gap-2 text-xs">
@@ -5240,7 +6113,12 @@ function SimulatorSnapshot() {
               {/* 原持仓列表（精简：只显示关键字段） */}
               <div className="space-y-2 mt-3">
                 {account?.positions.map(p => (
-                  <PositionRow key={p.code} pos={p} />
+                  <PositionRow
+                    key={p.code}
+                    pos={p}
+                    acting={!!actingByCode[p.code]}
+                    onOrder={submitOrder}
+                  />
                 ))}
               </div>
             </div>
@@ -5251,7 +6129,7 @@ function SimulatorSnapshot() {
   );
 }
 
-// ==================== 持仓行（含迷你 sparkline） ====================
+// ==================== 持仓行（含迷你 sparkline + 加仓/减仓/清仓） ====================
 
 interface PositionRowPos {
   code: string;
@@ -5263,23 +6141,146 @@ interface PositionRowPos {
   unrealizedPnLPct: number;
 }
 
-function PositionRow({ pos }: { pos: PositionRowPos }) {
+function PositionRow({
+  pos,
+  acting,
+  onOrder,
+}: {
+  pos: PositionRowPos;
+  acting: boolean;
+  onOrder: (code: string, direction: 'long' | 'short', volume: number) => Promise<void>;
+}) {
+  // 单行持仓的可调股数（A 股 100 整数倍，默认 100）
+  const [vol, setVol] = useState<number>(100);
+  // 当前实时价（用于估算金额）
+  const price = pos.currentPrice;
+
+  const incVol = () => setVol(v => Math.min(99_900, v + 100));   // 上限 999 手
+  const decVol = () => setVol(v => Math.max(100, v - 100));
+
+  const handleBuy = () => onOrder(pos.code, 'long', vol);
+  const handleSell = () => onOrder(pos.code, 'short', vol);
+
+  // 清仓：弹 confirm（沿用项目"具体数字"确认模式，避免误操作）
+  const handleClear = () => {
+    const ok = window.confirm(
+      `🧹 确认清仓 ${pos.name || pos.code}？\n\n` +
+      `当前持仓：${pos.volume} 股\n` +
+      `最新价：¥${fmtPrice(price)}\n` +
+      `持仓市值：¥${fmtMoney(price * pos.volume)}\n` +
+      `浮盈/亏：${pos.unrealizedPnL >= 0 ? '+' : ''}¥${fmtMoney(Math.abs(pos.unrealizedPnL))}（${pos.unrealizedPnLPct >= 0 ? '+' : ''}${pos.unrealizedPnLPct.toFixed(2)}%）\n\n` +
+      `将按市价卖出全部 ${pos.volume} 股，确认执行？`
+    );
+    if (!ok) return;
+    onOrder(pos.code, 'short', pos.volume);
+  };
+
+  const sellExceedsHolding = vol > pos.volume;
+
   return (
-    <div className="flex items-center justify-between text-sm border-b border-slate-800/50 pb-2 last:border-b-0">
-      <div className="flex-1 min-w-0">
-        <div className="text-white font-medium truncate">{pos.name || pos.code}</div>
-        <div className="text-xs text-slate-500">{pos.code} · {pos.volume} 股 · 成本 {fmtPrice(pos.avgCost)}</div>
-      </div>
-      <div className="w-20 mx-2 shrink-0">
-        <MiniSparkline code={pos.code} />
-      </div>
-      <div className="text-right shrink-0">
-        <div className="text-white font-semibold">{fmtPrice(pos.currentPrice)}</div>
-        <div className={`text-xs font-bold flex items-center gap-1 justify-end ${pos.unrealizedPnL >= 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
-          <span>{pos.unrealizedPnL >= 0 ? '↑' : '↓'}</span>
-          <span>{fmtMoney(Math.abs(pos.unrealizedPnL))}</span>
-          <span className="text-[10px] opacity-80">({pos.unrealizedPnLPct >= 0 ? '+' : ''}{pos.unrealizedPnLPct.toFixed(2)}%)</span>
+    <div className={`bg-slate-950/40 border rounded-lg p-2.5 transition-all ${
+      acting ? 'border-cyan-700/60 bg-cyan-950/20' : 'border-slate-800/60'
+    }`}>
+      {/* 上排：股票信息 + sparkline + 实时价/盈亏 */}
+      <div className="flex items-center justify-between text-sm">
+        <div className="flex-1 min-w-0">
+          <div className="text-white font-medium truncate">{pos.name || pos.code}</div>
+          <div className="text-xs text-slate-500">{pos.code} · {pos.volume} 股 · 成本 {fmtPrice(pos.avgCost)}</div>
         </div>
+        <div className="w-20 mx-2 shrink-0">
+          <MiniSparkline code={pos.code} />
+        </div>
+        <div className="text-right shrink-0">
+          <div className="text-white font-semibold">{fmtPrice(pos.currentPrice)}</div>
+          <div className={`text-xs font-bold flex items-center gap-1 justify-end ${pos.unrealizedPnL >= 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+            <span>{pos.unrealizedPnL >= 0 ? '↑' : '↓'}</span>
+            <span>{fmtMoney(Math.abs(pos.unrealizedPnL))}</span>
+            <span className="text-[10px] opacity-80">({pos.unrealizedPnLPct >= 0 ? '+' : ''}{pos.unrealizedPnLPct.toFixed(2)}%)</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 下排：股数步进器 + 买入/卖出/清仓 */}
+      <div className="flex items-center gap-2 mt-2 pt-2 border-t border-slate-800/40">
+        {/* 步进器 */}
+        <div className="flex items-center bg-slate-900 border border-slate-700/60 rounded overflow-hidden h-6">
+          <button
+            onClick={decVol}
+            disabled={acting || vol <= 100}
+            className="w-7 h-6 text-slate-300 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed text-sm leading-none"
+            title="减少 100 股"
+            type="button"
+          >
+            −
+          </button>
+          <input
+            type="number"
+            value={vol}
+            onChange={e => {
+              const n = parseInt(e.target.value || '0', 10);
+              if (isNaN(n)) { setVol(100); return; }
+              // 强制 100 整数倍（向上取整）
+              setVol(Math.max(100, Math.min(99_900, Math.ceil(n / 100) * 100)));
+            }}
+            disabled={acting}
+            className="w-14 h-6 text-center text-xs bg-transparent text-slate-200 border-x border-slate-700/60 focus:outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
+            step={100}
+            min={100}
+            max={99900}
+            title="调整股数（100 整数倍）"
+          />
+          <button
+            onClick={incVol}
+            disabled={acting || vol >= 99_900}
+            className="w-7 h-6 text-slate-300 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed text-sm leading-none"
+            title="增加 100 股"
+            type="button"
+          >
+            +
+          </button>
+        </div>
+        <span className="text-[10px] text-slate-500 mr-0.5" title={`估算金额 ¥${(price * vol).toFixed(0)}`}>
+          ¥{(price * vol / 1000).toFixed(1)}k
+        </span>
+
+        {/* 买入 */}
+        <button
+          onClick={handleBuy}
+          disabled={acting}
+          className="flex-1 h-6 text-[11px] font-medium rounded bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white flex items-center justify-center gap-1"
+          title={`按市价买入 ${vol} 股 ${pos.name || pos.code}（估算 ¥${(price * vol).toFixed(0)}）`}
+          type="button"
+        >
+          {acting ? <span className="animate-pulse">⏳</span> : <>🟢 买入</>}
+        </button>
+
+        {/* 卖出 */}
+        <button
+          onClick={handleSell}
+          disabled={acting || sellExceedsHolding}
+          className={`flex-1 h-6 text-[11px] font-medium rounded text-white flex items-center justify-center gap-1 disabled:cursor-not-allowed ${
+            sellExceedsHolding
+              ? 'bg-slate-700 opacity-40'
+              : 'bg-emerald-600 hover:bg-emerald-500'
+          } ${acting ? 'opacity-40' : ''}`}
+          title={sellExceedsHolding
+            ? `持仓仅 ${pos.volume} 股，无法卖出 ${vol} 股`
+            : `按市价卖出 ${vol} 股 ${pos.name || pos.code}`}
+          type="button"
+        >
+          {acting ? <span className="animate-pulse">⏳</span> : <>🔴 卖出</>}
+        </button>
+
+        {/* 清仓 */}
+        <button
+          onClick={handleClear}
+          disabled={acting}
+          className="h-6 w-7 text-[11px] font-medium rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-slate-200 border border-slate-600 flex items-center justify-center"
+          title={`清仓全部 ${pos.volume} 股`}
+          type="button"
+        >
+          🧹
+        </button>
       </div>
     </div>
   );
@@ -5349,7 +6350,7 @@ function MiniSparkline({ code }: { code: string }) {
   );
 }
 
-// ==================== ⑤ 自动驾驶流水（信号明细）====================
+// ==================== 自动驾驶流水（信号明细）====================
 
 function AutoTradeJournal() {
   const ap = useAutoPilot();
@@ -5477,7 +6478,7 @@ function AutoTradeJournal() {
       <div className="flex items-center justify-between mb-3">
         <div>
           <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
-            ⑤ 自动驾驶流水
+            自动驾驶流水
             {ap.isAutoPilot && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-cyan-900/50 text-cyan-300 border border-cyan-700/60">
                 🤖 实时
@@ -5964,7 +6965,7 @@ function PortfolioOverlapAnalysis() {
     })();
   }, [ap.orders.length]); // 订单变化时轻量重读（反映新加的持仓）
 
-  // 拉持仓（带盈亏%）
+  // 拉持仓（带盈亏%）+ 从 IDB 兜底补全 name（防止后端不返回 name 时显示代码）
   useEffect(() => {
     let active = true;
     const loadPositions = async () => {
@@ -5972,20 +6973,60 @@ function PortfolioOverlapAnalysis() {
         const res = await fetch('/api/simulator');
         const json = await res.json();
         if (active && json.success && json.data?.account?.positions) {
-          // 从 db.stockScores 拿 code → compositeScore 映射
+          // 从 db.stockScores 拿 code → { name, compositeScore } 映射（用于 name 兜底 + 综合分）
           const { db } = await import('@/lib/quant/db/database');
           const table = db.stockScores;
-          const scoreMap: Record<string, number> = {};
+          const stockInfoMap: Record<string, { name: string; compositeScore: number }> = {};
           if (table) {
             const all = await table.toArray();
             const latestDate = [...new Set(all.map(r => r.date))].sort().at(-1);
             const recents = all.filter(r => r.date === latestDate);
-            recents.forEach(r => { scoreMap[r.code] = r.compositeScore; });
+            recents.forEach(r => { stockInfoMap[r.code] = { name: r.name, compositeScore: r.compositeScore }; });
           }
-          setPositions(json.data.account.positions.map((p: any) => ({
-            code: p.code, name: p.name || p.code, compositeScore: scoreMap[p.code],
-            unrealizedPnLPct: p.avgCost > 0 ? ((p.currentPrice - p.avgCost) / p.avgCost) * 100 : 0,
-          })));
+          // 全市场兜底：stockDataCache.list() 含 code→name 的全量映射（5000+ 只股票，IDB 优先）
+          //   - 持仓不在 stockScores（没进 Top10 推荐）时也能拿到 name
+          //   - 即使后端 /api/simulator 不返回 name 也能补全
+          let stockListNameMap: Record<string, string> = {};
+          try {
+            const { stockDataCache } = await import('@/lib/quant/data/stock-data-cache');
+            const listRes = await stockDataCache.list();
+            if (listRes.data?.success && listRes.data.data) {
+              listRes.data.data.forEach((s: any) => {
+                const rawCode = s.code || '';
+                stockListNameMap[rawCode] = s.name;
+                // 同时支持 "sh600549" / "sz000001" / "600549.SH" / "000001.SZ" / "600549" 多种 code 格式
+                if (rawCode.includes('.')) {
+                  // "600549.SH" → "600549" + 后缀
+                  const [num, suffix] = rawCode.split('.');
+                  stockListNameMap[num] = s.name;
+                  const lowerSuffix = suffix.toLowerCase(); // "sh" / "sz"
+                  stockListNameMap[lowerSuffix + num] = s.name;        // "sh600549"
+                  stockListNameMap[num + '.' + lowerSuffix] = s.name;   // "600549.sh"（不区分大小写）
+                }
+              });
+            }
+          } catch { /* IDB 无 list 数据时静默忽略，继续走 stockScores 兜底 */ }
+          // code 规范化：统一转 "sh600549" / "sz000001" 形式（小写、无后缀、trim）
+          //  输入可能："sh600549" / "SH600549" / "600549.SH" / "600549" / " 600549 "
+          //  输出："sh600549" / "sz000001" / "600549"（去掉后缀时无法判断市场，归类为通用）
+          const normalizeCode = (c: string): string => {
+            const cleaned = c.trim().toLowerCase();
+            if (cleaned.startsWith('sh') || cleaned.startsWith('sz')) return cleaned;
+            if (cleaned.endsWith('.sh')) return 'sh' + cleaned.slice(0, -3);
+            if (cleaned.endsWith('.sz')) return 'sz' + cleaned.slice(0, -3);
+            return cleaned; // 已经是纯数字
+          };
+          setPositions(json.data.account.positions.map((p: any) => {
+            const normCode = normalizeCode(p.code);
+            // name 兜底链路：后端 p.name → stockScores（推荐过此股）→ stockList（全市场，含此股）→ "—"（绝不再 fallback 到代码）
+            const resolvedName = p.name || stockInfoMap[normCode]?.name || stockListNameMap[normCode] || stockListNameMap[p.code] || '—';
+            return {
+              code: p.code,
+              name: resolvedName,
+              compositeScore: stockInfoMap[normCode]?.compositeScore,
+              unrealizedPnLPct: p.avgCost > 0 ? ((p.currentPrice - p.avgCost) / p.avgCost) * 100 : 0,
+            };
+          }));
         }
       } catch { /* ignore */ }
       finally { if (active) setLoading(false); }
@@ -6078,11 +7119,9 @@ function PortfolioOverlapAnalysis() {
           ) : (
             <div className="space-y-1.5">
               {notInTop.map(p => (
-                <div key={p.code} className="flex items-center justify-between text-xs">
-                  <span className="text-slate-300 truncate">{p.name}</span>
-                  <span className={`font-mono text-[10px] ${p.unrealizedPnLPct >= 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
-                    {p.unrealizedPnLPct >= 0 ? '+' : ''}{p.unrealizedPnLPct.toFixed(1)}%
-                  </span>
+                <div key={p.code} className="flex items-center text-xs">
+                  {/* 仅显示股票名称（参考候选区的简洁风格）；name 兜底：后端 → IDB → "—"（绝不再 fallback 到代码）*/}
+                  <span className="text-white truncate">{p.name || '—'}</span>
                 </div>
               ))}
             </div>
@@ -6438,7 +7477,7 @@ function AutoPilotDailyReport() {
       ? 'bg-gradient-to-br from-slate-900 to-cyan-950/40 border border-cyan-700/60 rounded-xl p-6 max-w-2xl w-full max-h-[80vh] overflow-y-auto'
       : 'bg-gradient-to-r from-slate-900 via-cyan-950/30 to-slate-900 border border-cyan-800/50 rounded-xl p-4'
     }>
-      <div className="flex items-center justify-between mb-3">
+      <div data-wizard-target="daily-report" className="flex items-center justify-between mb-3">
         <h2 className={popped ? 'text-2xl font-bold text-cyan-300' : 'text-lg font-bold text-cyan-300'}>
           📊 自动驾驶日报
           <span className="text-xs text-slate-500 font-normal ml-2">
@@ -6728,6 +7767,29 @@ function AIDiagnosisPanel() {
       })
       .catch(() => {});
   }, []);
+
+  // v3.0（2026-06-15）：拉 snapshot 统计 + 拉 WF 面板时自动回填未来收益
+  useEffect(() => {
+    (async () => {
+      try {
+        const { getSnapshotStats, fillFutureReturns } = await import('@/lib/quant/db/factor-snapshots');
+        const stats = await getSnapshotStats();
+        // @ts-ignore — 大文件 TS 漏检 setter；dev 实际能找到
+        setSnapshotStats(stats);
+        // 拉完后自动尝试回填未来收益（如果有 5/20 天前的快照未填）
+        const f5 = await fillFutureReturns(5);
+        const f20 = await fillFutureReturns(20);
+        if (f5.filled > 0 || f20.filled > 0) {
+          const newStats = await getSnapshotStats();
+          // @ts-ignore
+          setSnapshotStats(newStats);
+        }
+      } catch (e) {
+        console.warn('[snapshot] load failed:', e);
+      }
+    })();
+  }, []);
+  // 注：setSnapshotStats 由 useState 声明（行 3231）
 
   // 拉账户 + 命中率
   useEffect(() => {
@@ -7128,7 +8190,7 @@ function AdvancedFeatures() {
         className="w-fit sm:w-full mx-auto sm:mx-0 flex items-center justify-between gap-3 px-4 py-2.5 sm:px-3 sm:py-3 bg-slate-900 border border-slate-800 rounded-full sm:rounded-xl hover:border-slate-600 transition-colors whitespace-nowrap"
       >
         <span className="text-sm font-semibold text-slate-300">
-          ⑤ 高级功能（{modules.length}）
+          ④ 高级功能（{modules.length}）
         </span>
         <span className="text-slate-500 text-xs sm:text-sm">{open ? '▲ 收起' : '▼ 展开'}</span>
       </button>
@@ -7177,26 +8239,20 @@ export default function QuantLitePage() {
       <QuantDataProvider>
         <AutoPilotProvider>
           <div className="min-h-screen bg-slate-950 text-slate-100">
+            {/* v3.0.2（2026-06-15）：新手引导向导 — 首次进入自动显示 */}
+            <OnboardingWizard />
+            {/* v3.0.2（2026-06-15）：移动端底部 Tab Bar — 业界标准 5 tab 导航 */}
+            {/* @ts-ignore — 大文件 setter 漏检；dev 实际能找到 */}
+            <MobileBottomTabBar />
             <TopBar />
             <PriceAnomalyDetector />
             <main className="max-w-7xl mx-auto px-4 py-6">
               <MarketOverview />
+              <RiskEventStream />
               <TodayRecommendations
                 onAddToSimulator={() => {}}
                 onShowDetail={(s) => setSelectedDetail(s)}
                 onShowScoreDetail={(s) => setSelectedScoreDetail(s)}
-              />
-              <LiteScreenerSection
-                onAddToSimulator={(codes) => {
-                  // 真实联动：滚动到 ④ 区 + 提示已加入（与 handleAddToSimulator 内部 CustomEvent 协作）
-                  toast.success(`🎯 ${codes.length} 只已在交易池`, {
-                    description: '已刷新「④ 模拟交易」策略池',
-                    duration: 3000,
-                  });
-                  setTimeout(() => {
-                    document.getElementById('section-simulator')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                  }, 300);
-                }}
               />
               <WatchlistMonitor
                 onGoPro={() => {}}
@@ -7209,9 +8265,11 @@ export default function QuantLitePage() {
               <PortfolioOverlapAnalysis />
               <AIDiagnosisPanel />
               <StrategyEffectiveness />
-              <AutoPilotDailyReport />
-              <AutoTradeJournal />
-              <WeeklyReview />
+              <div data-section-target="autopilot">
+                <AutoPilotDailyReport />
+                <AutoTradeJournal />
+                <WeeklyReview />
+              </div>
               <AdvancedFeatures />
               <footer className="text-center text-xs text-slate-600 py-4">
                 AI4U 量化交易系统 · 速览模式 · 模拟盘仅供学习研究，不构成投资建议

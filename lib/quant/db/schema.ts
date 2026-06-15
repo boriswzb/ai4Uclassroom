@@ -302,6 +302,95 @@ export interface DbStockScore {
 // ==================== 股票数据缓存 ====================
 
 /**
+ * 个股每日 raw 因子快照（用于真实 WF 回测 + 历史 IC 计算）
+ *
+ * v3.0（2026-06-15）：新增"每日 raw 因子快照"表
+ *
+ * 与 stockScores 的区别：
+ *   - stockScores：只存"分析当时的 Top N"（每天只 10 条）
+ *   - factorSnapshots：存每天全候选池的 raw 因子（每天 50-100 条）
+ *
+ * 用途：
+ *   1. WF 用真实 T+1 收益（从 priceNext 推算）替代代理收益
+ *   2. IC 统计用历史 snapshot 算滚动 IC（无需每次重跑全市场）
+ *   3. 因子失效检测（哪些因子最近 IC 突然变负）
+ *
+ * 业界标准：
+ *   - WorldQuant/聚宽每日 raw 因子库 = 200+ GB（百万股 × 数千因子）
+ *   - 个人版用 100-500 只候选 + 14 个 raw 因子 ≈ 14KB/天 ≈ 5MB/年
+ */
+export interface DbFactorSnapshot {
+  id: string;                       // `${date}_${code}` — 每天每票一条
+  date: string;                     // YYYYMMDD
+  timestamp: number;                // 抓取时间
+
+  // ── 价格 ──
+  code: string;
+  name: string;
+  price: number;                    // 当日收盘
+  changePercent: number;            // 当日涨跌幅（%）
+
+  // ── raw 因子（与 FactorRawValues 一致）──
+  pe: number; pb: number; ps: number;
+  roe: number; grossMargin: number; debtRatio: number; eps: number; accrualsRatio: number;
+  momentum5: number; momentum10: number; momentum20: number; momentum60: number; momentum120: number;
+  rsi14: number; cci14: number; bias20: number;
+  mainNetInflow5d: number; mainNetInflow20d: number; mainNetInflowRatio: number;
+  macdHist: number; kdjK: number; kdjD: number;
+  bollPosition: number; adx: number; lowVolatility: number;
+  turnoverRate: number; volumeRatio: number;
+  marketCap: number; floatMarketCap: number; avgAmount20d: number;
+  industry: string; wqAlphaScore: number;
+
+  // ── 未来收益（每日跑完才填，填后这条记录才"完整"）──
+  //   T+5 / T+20 收益用于 WF 真实回测
+  //   缺这些字段的快照不能用于 WF
+  priceNext5?: number;              // T+5 收盘价
+  priceNext20?: number;             // T+20 收盘价
+  return5d?: number;                // (priceNext5 - price) / price × 100（%）
+  return20d?: number;
+  filledAt?: number;                // 未来收益填补时间
+}
+
+/**
+ * Walk-Forward 验证报告快照（每次验证保存一条）
+ *
+ * v2.1.1（2026-06-15）：用于追踪"当前权重设置在历史上是否持续有效"
+ * 每次点"🚀 开始验证" → 保存一条记录 + 与上一次对比
+ * 如果连续 3 次都 C/D 级 → 触发"⚠️ 权重可能失效"提示
+ */
+export interface DbWalkforwardReport {
+  id: string;                       // `${date}_${period}_${weightMode}`，保证每天每配置只存最新一条
+  date: string;                     // YYYYMMDD
+  timestamp: number;                // 保存时间戳（用于排序）
+
+  // 配置快照
+  period: string;                   // 5d / 20d
+  weightMode: 'default' | 'ic' | 'manual';  // 权重模式
+  longMomentum: boolean;            // 是否长动量
+  useICHistory: boolean;            // 是否严谨 IC（仅诊断参考）
+
+  // 评级（v2.1.1 walkforward-recommendation.ts 输出）
+  rating: 'A+' | 'A' | 'B' | 'C' | 'D';
+  robustnessScore: number;          // 0-100
+  annualizedSharpe: number;
+  winRate: number;
+  excessWinRate: number;
+  totalReturn: number;              // 累计收益（%）
+  maxDrawdown: number;              // 最大回撤（%）
+  windowCount: number;              // 验证窗口数
+  avgExcessReturn: number;          // 平均超额收益（%）
+
+  // 一句话诊断
+  diagnosis: string;
+
+  // 完整报告（JSON 字符串，含 windows[] 明细）
+  fullReport: string;
+
+  updatedAt: number;
+}
+
+/**
  * 股票多类数据统一缓存表
  * 非交易时段数据不变，一次抓取长期有效
  * stale-while-revalidate: 先读缓存，后台静默刷新
@@ -331,5 +420,8 @@ export type QuantTables = {
   users: Table<DbUser>;
   factorICRecords: Table<DbFactorICRecord>;
   factorAnalysisSummary: Table<DbFactorAnalysisSummary>;
+  stockScores: Table<DbStockScore>;
   stockCache: Table<DbStockCache>;
+  walkforwardReports: Table<DbWalkforwardReport>;  // v2.1.1（2026-06-15）
+  factorSnapshots: Table<DbFactorSnapshot>;  // v3.0（2026-06-15）— 每日 raw 因子快照
 };

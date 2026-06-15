@@ -299,6 +299,55 @@
   }
 }
 
+/* v3.0.2（2026-06-15）— 移动端 PWA 优化（业界标准）── */
+@media (max-width: 768px) {
+  /* 1. 禁用点击高亮（蓝色高亮框）*/
+  button, a, [role="button"] {
+    -webkit-tap-highlight-color: transparent;
+    /* 禁用双击缩放 */
+    touch-action: manipulation;
+  }
+
+  /* 2. 最小点击区 44px（Apple HIG / Material Design 业界标准）*/
+  button:not([class*="h-"]) {
+    min-height: 36px;  /* 紧凑模式（速览模式密度高）*/
+  }
+
+  /* 3. 输入框 16px（避免 iOS 缩放）*/
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+
+  /* 4. 滚动平滑 */
+  html {
+    scroll-behavior: smooth;
+  }
+
+  /* 5. 滑入抽屉动画（备用，业界动画曲线）*/
+  @keyframes slide-up {
+    from { transform: translateY(20px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+  .animate-slide-up {
+    animation: slide-up 0.3s ease-out;
+  }
+}
+
+/* 6. 暗黑模式 + PWA standalone 模式 — 隐藏 Safari 工具栏影响 */
+@media (display-mode: standalone) {
+  /* 减少主内容顶部 padding（因为没有浏览器工具栏）*/
+  body.ai4u-quant-app main {
+    padding-top: 0.5rem !important;
+  }
+}
+
+/* 7. 通知横幅 + 弹窗 — PWA 模式下边距更紧凑 */
+@media (max-width: 768px) and (display-mode: standalone) {
+  .pwa-standalone-banner {
+    top: env(safe-area-inset-top, 0) !important;
+  }
+}
+
 /* 通过 JS 在 App 内为 <body> 添加 .ai4u-quant-app 类 */
 body.ai4u-quant-app a[href="/quant/pro"],
 body.ai4u-quant-app a[href^="/quant/pro"] {

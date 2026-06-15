@@ -19,6 +19,8 @@ import type {
   DbFactorAnalysisSummary,
   DbStockScore,
   DbStockCache,
+  DbWalkforwardReport,  // v2.1.1（2026-06-15）
+  DbFactorSnapshot,  // v3.0（2026-06-15）
 } from './schema';
 
 export * from './schema';
@@ -40,6 +42,8 @@ class QuantDatabase extends Dexie {
   factorAnalysisSummary!: Table<DbFactorAnalysisSummary>;
   stockScores!: Table<DbStockScore>;
   stockCache!: Table<DbStockCache>;
+  walkforwardReports!: Table<DbWalkforwardReport>;  // v2.1.1（2026-06-15）
+  factorSnapshots!: Table<DbFactorSnapshot>;  // v3.0（2026-06-15）
 
   constructor() {
     super('OpenMAIC_Quant');
@@ -104,6 +108,31 @@ class QuantDatabase extends Dexie {
     stockScores: 'id, date, code, period, scoreVersion, [date+period+scoreVersion], [date+period+scoreVersion+code], compositeScore',
     stockCache: 'id, type, code, [type+code], fetchedAt',
   });
+
+  this.version(8).stores({
+    // v2.1.1（2026-06-15）：Walk-Forward 验证报告快照
+    //   id 格式：`${date}_${period}_${weightMode}_${longMomentum ? 'L' : 'S'}`
+    //   保证"同一天同一配置"只保留最新一条（用 put 而不是 add）
+    factorICRecords: 'id, date, code, [date+code], nextReturn5, nextReturn20',
+    factorAnalysisSummary: 'id, factorName, period, date, [factorName+period]',
+    stockScores: 'id, date, code, period, scoreVersion, [date+period+scoreVersion], [date+period+scoreVersion+code], compositeScore',
+    stockCache: 'id, type, code, [type+code], fetchedAt',
+    walkforwardReports: 'id, date, period, weightMode, [date+period+weightMode], timestamp',
+  });
+
+  this.version(9).stores({
+    // v3.0（2026-06-15）：每日 raw 因子快照表
+    //   用途：WF 真实收益回测 + 历史 IC 统计
+    //   id 格式：`${date}_${code}`（每天每票一条）
+    //   复合索引：[date+code] 用于查某天的所有股票
+    //   复合索引：[code+date] 用于查某只股票的历史因子时序
+    factorICRecords: 'id, date, code, [date+code], nextReturn5, nextReturn20',
+    factorAnalysisSummary: 'id, factorName, period, date, [factorName+period]',
+    stockScores: 'id, date, code, period, scoreVersion, [date+period+scoreVersion], [date+period+scoreVersion+code], compositeScore',
+    stockCache: 'id, type, code, [type+code], fetchedAt',
+    walkforwardReports: 'id, date, period, weightMode, [date+period+weightMode], timestamp',
+    factorSnapshots: 'id, date, code, industry, [date+code], [code+date], [date+industry]',
+  });
 }
 }
 
@@ -142,6 +171,8 @@ export const db = {
   get factorAnalysisSummary() { const d = getQuantDb(); return d?.factorAnalysisSummary ?? null; },
   get stockScores() { const d = getQuantDb(); return d?.stockScores ?? null; },
   get stockCache() { const d = getQuantDb(); return d?.stockCache ?? null; },
+  get walkforwardReports() { const d = getQuantDb(); return d?.walkforwardReports ?? null; },  // v2.1.1
+  get factorSnapshots() { const d = getQuantDb(); return d?.factorSnapshots ?? null; },  // v3.0
 // transaction 方法代理，支持 db.transaction('rw', db.accounts!, ...)
   transaction(mode: Parameters<QuantDatabase['transaction']>[0], tables: Table<any, any, any>[], scope: () => Promise<void>): Promise<void> {
     const d = getQuantDb();

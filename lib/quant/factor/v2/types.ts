@@ -37,12 +37,17 @@ export interface FactorRawValues {
   grossMargin: number;      // 毛利率 (%)
   debtRatio: number;        // 资产负债率 (%)
   eps: number;              // 每股收益 TTM
+  // v2.1.1（2026-06-15）：Sloan Accruals 盈余质量
+  //   OCF/NI = 经营现金流 / 净利润，越高说明利润是真金白银
+  //   A 股经验值：1.0+ 高质量 / 0.5-1.0 中等 / <0.5 低质量（大量应收账款）
+  accrualsRatio: number;    // OCF/NI 比值（缺失时 = 1.0 中性）
 
   // 3. 动量（momentum）
   momentum5: number;        // 5 日收益
   momentum10: number;
   momentum20: number;
   momentum60: number;
+  momentum120?: number;     // v2.1.1（2026-06-15）：120 日收益（Jegadeesh-Titman 长动量）
 
   // 4. 反转（reversal）
   rsi14: number;            // 0-100
@@ -89,6 +94,8 @@ export interface FactorPercentiles {
   roe: number;
   grossMargin: number;
   momentum20: number;
+  momentum60?: number;     // v2.1.1
+  momentum120?: number;    // v2.1.1
   rsi: number;
   mainNetInflow: number;
   macd: number;
@@ -178,6 +185,10 @@ export interface V2ScoreOptions {
   weightMode: 'default' | 'ic' | 'manual';
   customWeights?: Record<string, number>;
   filterFlags?: boolean;     // 是否过滤 ST/涨跌停/停牌
+  // v2.1（2026-06-15）：weightMode='ic' 时需要传入 IC 统计
+  icStats?: Record<string, { ic: number; ir: number; n: number }>;
+  // v2.1.1（2026-06-15）：长动量开关
+  longMomentum?: boolean;
 }
 
 // ── 行业列表（申万一级） ───────────────────────────

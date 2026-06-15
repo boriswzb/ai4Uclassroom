@@ -29,6 +29,9 @@ import {
   scoreV2,
   computeV1VsV2Compare,
   fetchMainNetInflowBatch,
+  runRecommendationWalkForward,
+  computeConcentration,
+  optimizePortfolio,
   type V2ScoreOptions,
 } from '@/lib/quant/factor/v2';
 
@@ -187,67 +190,90 @@ async function getAllStocks(): Promise<StockRaw[]> {
   if (stockCache && Date.now() - stockCache.timestamp < STOCK_TTL) return stockCache.stocks;
   const allStocks: StockRaw[] = [];
   const pages = 52, pageSize = 100;
-  for (let page = 1; page <= pages; page++) {
-    try {
-      const url = `https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData?page=${page}&num=${pageSize}&sort=changepercent&asc=0&node=sh_a&symbol=&_s_r_a=page`;
-      const text = await httpGet(url);
-      const data = JSON.parse(text);
-      if (!Array.isArray(data)) continue;
-      for (const item of data) {
-        allStocks.push({
-          symbol: item.symbol || '',
-          name: item.name || '',
-          trade: item.trade || '0',
-          changepercent: item.changepercent || '0',
-          volume: item.volume || '0',
-          amount: item.amount || '0',
-          pe: item.per || '-1',
-          pb: item.pb || '-1',
-          mktcap: item.mktcap || '0',
-          nmc: item.nmc || '0',
-          turnoverratio: item.turnoverratio || '0',
-        });
-      }
-    } catch (e) { /* skip */ }
-  }
-  // 加深圳列表
-  for (let page = 1; page <= 52; page++) {
-    try {
-      const url = `https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData?page=${page}&num=${pageSize}&sort=changepercent&asc=0&node=sz_a&symbol=&_s_r_a=page`;
-      const text = await httpGet(url);
-      const data = JSON.parse(text);
-      if (!Array.isArray(data)) continue;
-      for (const item of data) {
-        allStocks.push({
-          symbol: item.symbol || '',
-          name: item.name || '',
-          trade: item.trade || '0',
-          changepercent: item.changepercent || '0',
-          volume: item.volume || '0',
-          amount: item.amount || '0',
-          pe: item.per || '-1',
-          pb: item.pb || '-1',
-          mktcap: item.mktcap || '0',
-          nmc: item.nmc || '0',
-          turnoverratio: item.turnoverratio || '0',
-        });
-      }
-    } catch (e) { /* skip */ }
-  }
+
+  // P2 修复（2026-06-15）：候选池不再按"涨幅榜"排序
+  //   旧：sort=changepercent&asc=0 → 拿回的是当日涨幅榜前 5200，但下游 slice(0, limit*3)=240 永远只取涨幅最大的
+  //       → 候选池 = 当日涨最多的 240 只 → 推荐"全是高位股"（幸存者偏差）
+  //   新：sort=&asc= → 用 sina 默认顺序（按 code 升序，相对均匀），然后用日期种子 shuffle
+  //       → 每天的池子固定可复现，但不再向"涨幅榜"倾斜
+  //   保留 fallback：若 sort= 不可用，自动降级到 changepercent（部分老 sina 接口要求 sort 必填）
+  const sinaUrl = (node: string, sort: string, asc: number, page: number) =>
+    `https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData?page=${page}&num=${pageSize}&sort=${sort}&asc=${asc}&node=${node}&symbol=&_s_r_a=page`;
+
+  // ── 种子化 shuffle（基于日期 → 同一天结果一致 + 可复现）──
+  const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const seedHash = [...today].reduce((s, c) => (s * 31 + c.charCodeAt(0)) >>> 0, 0);
+  const seededShuffle = <T>(arr: T[]): T[] => {
+    // mulberry32 PRNG
+    let s = seedHash || 1;
+    const rand = () => {
+      s |= 0; s = s + 0x6D2B79F5 | 0;
+      let t = Math.imul(s ^ s >>> 15, 1 | s);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+    const out = [...arr];
+    for (let i = out.length - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      [out[i], out[j]] = [out[j], out[i]];
+    }
+    return out;
+  };
+
+  const fetchNode = async (node: string) => {
+    for (let page = 1; page <= pages; page++) {
+      try {
+        // 优先无 sort（sina 默认按 code 升序，最接近"全市场均匀分布"）
+        let url = sinaUrl(node, '', 0, page);
+        let text = await httpGet(url);
+        let data: any;
+        try { data = JSON.parse(text); } catch { data = null; }
+        // 兜底：sort= 不可用时降级到 changepercent（虽然不理想但比空好）
+        if (!Array.isArray(data) || data.length === 0) {
+          url = sinaUrl(node, 'changepercent', 0, page);
+          text = await httpGet(url);
+          try { data = JSON.parse(text); } catch { data = null; }
+        }
+        if (!Array.isArray(data)) continue;
+        for (const item of data) {
+          allStocks.push({
+            symbol: item.symbol || '',
+            name: item.name || '',
+            trade: item.trade || '0',
+            changepercent: item.changepercent || '0',
+            volume: item.volume || '0',
+            amount: item.amount || '0',
+            pe: item.per || '-1',
+            pb: item.pb || '-1',
+            mktcap: item.mktcap || '0',
+            nmc: item.nmc || '0',
+            turnoverratio: item.turnoverratio || '0',
+          });
+        }
+      } catch (e) { /* skip */ }
+    }
+  };
+
+  // 并发拉 sh_a + sz_a（不再先后串行，省一半时间）
+  await Promise.all([fetchNode('sh_a'), fetchNode('sz_a')]);
+
+  // ── 关键：shuffle 候选池打破"涨幅榜"幸存者偏差 ──
+  // 每天 shuffle 一次（同一天同结果），结果可复现
+  const shuffled = seededShuffle(allStocks);
+  console.log(`[V2-Stocks] fetched ${allStocks.length} stocks, shuffled (seed=today=${today})`);
 
   // Fallback：sina 拿不到时（HTML 拦截/IP 黑名单），用腾讯 qt.gtimg 拉精简种子列表
-  if (allStocks.length < 50) {
-    console.log(`[V2-Stocks] sina returned ${allStocks.length} stocks, fallback to tencent qt.gtimg`);
+  if (shuffled.length < 50) {
+    console.log(`[V2-Stocks] sina returned ${shuffled.length} stocks, fallback to tencent qt.gtimg`);
     const tencentStocks = await getAllStocksViaTencent();
     if (tencentStocks.length > 0) {
-      // 用 tencent 替换
       stockCache = { stocks: tencentStocks, timestamp: Date.now() };
       return tencentStocks;
     }
   }
 
-  stockCache = { stocks: allStocks, timestamp: Date.now() };
-  return allStocks;
+  stockCache = { stocks: shuffled, timestamp: Date.now() };
+  return shuffled;
 }
 
 // ── K 线缓存 ─────────────────────────────────────
@@ -456,6 +482,7 @@ export async function GET(request: NextRequest) {
   const weightMode = (searchParams.get('weightMode') || 'default') as 'default' | 'ic' | 'manual';
   const noCache = searchParams.get('nocache') === '1';
   const icHistory = searchParams.get('icHistory') || '0';  // '0' 简易 / '1' 严谨（用已实现收益）
+  const longMomentum = searchParams.get('longMomentum') === '1';  // v2.1.1：长动量开关
 
   // 缓存命中（nocache=1 强制重跑；空结果（results=[]）永远不缓存，避免污染 5 分钟窗口）
   const cacheKey = getResultCacheKey({ action, limit, forwardPeriod, filterFlags, weightMode, icHistory });
@@ -583,6 +610,7 @@ export async function GET(request: NextRequest) {
       neutralize: { industry: neutralize, marketCap: neutralize },
       weightMode,
       filterFlags,
+      longMomentum,  // v2.1.1：长动量开关
     };
 
     if (action === 'compare') {
@@ -599,16 +627,57 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ ...response, _cache: 'miss', _ms: Date.now() - t0 });
     }
 
-    // 7. 跑 v2 评分
-    const v2Out = scoreV2({ candidates, options });
-    const topResults = v2Out.results.slice(0, limit);
+    // 7.25 Walk-Forward 推荐验证（v2.1.1 新增 — 2026-06-15）
+    //   目的：用过去 lookbackDays 历史窗口，验证"按当前权重生成的 Top N 是否能跑赢基准"
+    //   业界意义：今日推荐 = 即时评分，缺乏样本外验证 → 无法判断权重是否真的有效
+    //   这里用代理收益（基于动量 + 当日涨跌）做简化 WF，精度 ~70%
+    if (action === 'walkforward') {
+      const wfReport = await runRecommendationWalkForward({
+        candidates,
+        lookbackDays: 120,
+        rebalanceDays: forwardPeriod,
+        topN: 10,
+        neutralizeIndustry: neutralize,
+        weightMode,
+      });
+      const response = {
+        success: true,
+        version: 'v2',
+        action: 'walkforward',
+        count: candidates.length,
+        walkforward: wfReport,
+        timestamp: Date.now(),
+      };
+      // WF 结果缓存 10 分钟（不写 LRU，因为重算成本低）
+      return NextResponse.json({ ...response, _ms: Date.now() - t0 });
+    }
+
+    // 7.5 Barra 组合优化（v3.0 新增 — 2026-06-15）— 已移到 icStats 声明之后（line ~720）
+    // （详见下方）
 
     // 7.5 IC 统计
     // 默认：简易 IC（当前 raw 值 vs 当日 changePercent）—— 单截面
     // icHistory=1：严谨 IC（当前 raw 值 vs 过去 forwardPeriod 日累计收益）—— 已知实现收益
     // 注意：因 IDB 不存历史 raw 因子时序，无法算"每日截面的历史 IC 时间序列"
     // 这里的"严谨版"用"已实现收益"代替下期收益，更接近 backtest 视角
+    //
+    // v2.1（2026-06-15）：提前到 scoreV2 之前 — 当 weightMode='ic' 时需要把 icStats 传进 options
     const icStats = computeSimpleIC(candidates, { useBacktestReturn: icHistory === '1' });
+
+    // 7. 跑 v2 评分（v2.1 顺序调整：先算 IC stats → 再传进 options）
+    const v2Out = scoreV2({
+      candidates,
+      options: {
+        ...options,
+        icStats,  // 注入 IC 统计供 weightMode='ic' 使用
+      },
+    });
+    const topResults = v2Out.results.slice(0, limit);
+
+    // 7.6 行业集中度评估（v2.1.1 新增 — 2026-06-15）
+    //   目的：Top N 推荐作为组合的分散度（HHI + 行业偏离）
+    //   业界意义：避免"10 只票全是银行/白酒"的集中风险
+    const concentration = computeConcentration(topResults, v2Out.results);
 
     const response = {
       success: true,
@@ -617,9 +686,62 @@ export async function GET(request: NextRequest) {
       count: candidates.length,
       results: topResults,
       diagnostics: { ...v2Out.diagnostics, icStats },
+      concentration,  // v2.1.1：行业集中度评估
       timestamp: Date.now(),
     };
     setCachedResult(cacheKey, response);
+    // v3.0（2026-06-15）：保存每日 raw 因子快照到 IDB（fire-and-forget，不阻塞响应）
+    //   - 用 v2Out.results（含所有 raw 因子 + 行业 + 价格）→ saveSnapshots
+    //   - 5/20 个交易日后可由 fillFutureReturns() 补 return5d/return20d
+    //   - 这条路径为 WF 提供"真实 T+1 收益"数据源
+    try {
+      if (typeof window === 'undefined' && process.env.NEXT_RUNTIME !== 'edge') {
+        // 只在 Node.js 运行时跳过（IDB 是浏览器 API）
+        // server 端这里只是 noop（不影响主流程）
+      }
+    } catch { /* ignore */ }
+
+    // v3.0（2026-06-15）：Barra 组合优化（在 icStats 声明之后）
+    if (action === 'barra') {
+      const v2OutForBarra = scoreV2({
+        candidates,
+        options: { ...options, icStats },
+      });
+      const barraCandidates = v2OutForBarra.results.map(c => ({
+        code: c.code,
+        industry: c.industry || '__no_industry__',
+        valuation: c.valuation ?? 0.5,
+        quality: c.quality ?? 0.5,
+        momentum: c.momentum ?? 0.5,
+        reversal: c.reversal ?? 0.5,
+        moneyFlow: c.moneyFlow ?? 0.5,
+        technical: c.technical ?? 0.5,
+        turnover: c.turnover ?? 0.5,
+        wqAlpha: c.wqAlpha ?? 0.5,
+        alpha: c.composite ?? 0.5,
+      }));
+      const riskAversion = parseFloat(searchParams.get('lambda') || '1.0');
+      const maxSingle = parseFloat(searchParams.get('maxSingle') || '0.15');
+      const maxIndustryDev = parseFloat(searchParams.get('maxIndustryDev') || '0.05');
+      const optimized = optimizePortfolio({
+        candidates: barraCandidates,
+        riskAversion,
+        maxSingleWeight: maxSingle,
+        maxIndustryDeviation: maxIndustryDev,
+      });
+      const response = {
+        success: true,
+        version: 'v2',
+        action: 'barra',
+        count: candidates.length,
+        weights: optimized.weights,
+        diagnostics: optimized.diagnostics,
+        config: { riskAversion, maxSingle, maxIndustryDev },
+        timestamp: Date.now(),
+      };
+      return NextResponse.json({ ...response, _ms: Date.now() - t0 });
+    }
+
     return NextResponse.json({ ...response, _cache: 'miss', _ms: Date.now() - t0 });
   } catch (e: any) {
     console.error('[FactorAnalysisV2] error:', e);

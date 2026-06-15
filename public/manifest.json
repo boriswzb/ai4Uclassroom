@@ -1,0 +1,64 @@
+{
+  "name": "AI4U 量化交易",
+  "short_name": "AI4U Quant",
+  "description": "AI 多因子量化交易系统 — 11 类因子 / Barra 风险模型 / 自动驾驶 / 模拟盘",
+  "start_url": "/quant",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0F172A",
+  "theme_color": "#0F172A",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "categories": ["finance", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/logo-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/quant-logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "今日推荐",
+      "short_name": "推荐",
+      "url": "/quant?tab=recommendations",
+      "description": "查看 Top 10 候选股票"
+    },
+    {
+      "name": "模拟交易",
+      "short_name": "交易",
+      "url": "/quant?tab=trading",
+      "description": "查看当前持仓 + 一键下单"
+    },
+    {
+      "name": "自动驾驶",
+      "short_name": "Auto",
+      "url": "/quant?tab=autopilot",
+      "description": "查看自动驾驶日报 + 流水"
+    },
+    {
+      "name": "因子研究",
+      "short_name": "研究",
+      "url": "/quant/factor-analysis-v2",
+      "description": "11 类因子 / 8 风格 / Barra 风险模型"
+    }
+  ],
+  "share_target": {
+    "action": "share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  }
+}

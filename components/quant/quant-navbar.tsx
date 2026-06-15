@@ -16,7 +16,7 @@ const TABS: { id: TabType; label: string; icon: string; href: string }[] = [
   { id: 'data',           label: '行情',    icon: '📁',   href: '/quant#data' },
   { id: 'strategies',     label: '策略',    icon: '⚙️',   href: '/quant#strategies' },
   { id: 'ai',             label: 'AI助手',  icon: '🤖',   href: '/quant#ai' },
-  { id: 'downloads',      label: '下载',    icon: '📦',   href: '/quant#downloads' },
+  { id: 'downloads',      label: '下载',    icon: '📦',   href: '/quant/downloads' },
 ];
 
 interface QuantNavbarProps {

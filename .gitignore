@@ -90,3 +90,8 @@ tests/generation/*.eval.result.md
 *.ppt
 *.key
 *.pem
+
+# ---- OpenMAIC/quant 加的 ----
+dev.db
+.hermes/
+*.bak

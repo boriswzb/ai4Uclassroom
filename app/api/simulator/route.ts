@@ -50,6 +50,16 @@ export async function GET() {
       });
     }
 
+    // P0 Bug 修复：刷新持仓价格（兜底拉不在 tradingCodes 中的持仓 K 线）
+    try {
+      const updated = await liveSimulator.refreshHoldingPrices();
+      if (updated > 0) {
+        console.log(`[simulator GET] refreshHoldingPrices updated ${updated} positions`);
+      }
+    } catch (e) {
+      console.warn('[simulator GET] refreshHoldingPrices failed:', e);
+    }
+
     const account = liveSimulator.getAccount();
     const isRunning = liveSimulator.isActive();
     const isAutoPilot = liveSimulator.isAutoPilotActive();
@@ -350,7 +360,77 @@ export async function POST(req: NextRequest) {
         // 任何下单都同步一次
         const orderUserId = await resolveUserId();
         syncAfter(orderUserId);
+        // ── 手动平仓后移出策略池（P1：避免下一 tick 自动驾驶立刻重新建仓）──
+        //   语义：用户主动清仓 = 表达"我不想再被自动交易这只票"
+        //   触发条件（全部满足）：
+        //     1) 手动平仓（方向 short）成交
+        //     2) 该 code 当前持仓为 0（即这次真的清光了，不是减仓）
+        //     3) 该 code 之前在策略池里（说明原来是自动驾驶/手动加进来的"待交易"标的）
+        //   不影响：
+        //     · 引擎自己的 short 1.0 清仓（走 this.submitOrder，不经过 API route）
+        //     · 风控止损强平（RiskEngine 内部，不经过 API route）
+        //     · 减仓未清光（持仓 != 0，跳过）
+        if (order.status === 'filled' && direction === 'short') {
+          const positions = liveSimulator.getPositionsForPersist();
+          const pos = positions.find(p => p.code === code);
+          const inPool = liveSimulator.getTradingCodes().includes(code);
+          if ((!pos || pos.volume === 0) && inPool) {
+            liveSimulator.removeStrategy(code);
+            syncAfter(orderUserId); // 移除策略后再同步一次盘
+            console.log(`[simulator API] 手动清仓 ${code}，已从策略池移除（自动驾驶不再建仓）`);
+          }
+        }
         return NextResponse.json({ success: true, data: { order } });
+      }
+
+      // ── 实时更新风控设置（速览模式 ⏰ 风险设置面板调用） ──
+      case 'updateRisk': {
+        const { stopLossPct, takeProfitPct, maxPositionPct, maxTotalPositions, enabled } = params as {
+          stopLossPct: number;
+          takeProfitPct: number;
+          maxPositionPct: number;
+          maxTotalPositions: number;
+          enabled: boolean;
+        };
+
+        // 参数校验（防御性，避免前端 bug 把 liveSimulator 弄崩）
+        if (
+          typeof stopLossPct !== 'number' || typeof takeProfitPct !== 'number' ||
+          typeof maxPositionPct !== 'number' || typeof maxTotalPositions !== 'number' ||
+          typeof enabled !== 'boolean'
+        ) {
+          return NextResponse.json({ success: false, error: '参数类型错误' }, { status: 400 });
+        }
+        if (stopLossPct > 0 || stopLossPct < -50) {
+          return NextResponse.json({ success: false, error: '止损百分比必须在 -50% ~ 0% 之间' }, { status: 400 });
+        }
+        if (takeProfitPct <= 0 || takeProfitPct > 200) {
+          return NextResponse.json({ success: false, error: '止盈百分比必须在 0% ~ 200% 之间' }, { status: 400 });
+        }
+        if (maxPositionPct <= 0 || maxPositionPct > 100) {
+          return NextResponse.json({ success: false, error: '单只最大占比必须在 0% ~ 100% 之间' }, { status: 400 });
+        }
+        if (maxTotalPositions <= 0 || maxTotalPositions > 50) {
+          return NextResponse.json({ success: false, error: '策略池上限必须在 1 ~ 50 只之间' }, { status: 400 });
+        }
+
+        // 应用到 liveSimulator（即使没启动也安全：updateRiskSettings 只改阈值，不启停引擎）
+        const result = liveSimulator.updateRiskSettings({
+          stopLossPct,
+          takeProfitPct,
+          maxPositionPct,
+          maxTotalPositions,
+          enabled,
+        });
+
+        return NextResponse.json({
+          success: true,
+          message: `风控已更新：${result.changes.join(' · ')}`,
+          data: {
+            settings: { stopLossPct, takeProfitPct, maxPositionPct, maxTotalPositions, enabled },
+            changes: result.changes,
+          }
+        });
       }
 
       default:

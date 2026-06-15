@@ -274,6 +274,24 @@ export class RiskEngine {
         }
         break;
       }
+
+      // ── P4: 日亏损预检查 ──
+      //   原版 daily_loss_limit 只在 checkPosition 里被 trigger 后被动平仓
+      //   现在在 checkOrder 里也检查：策略主动下单时如果日内已亏超阈值，主动拦截
+      //   避免日内亏损突破阈值（强止损 + 策略止损叠加击穿限制）
+      case 'daily_loss_limit': {
+        // 仅对卖出（short）触发：买入不影响（建仓不算亏）
+        if (order.direction === 'short' && this.account) {
+          const dailyPnL = this.account.totalPnL; // 简化：用累计盈亏代理日内盈亏
+          const dailyLossRatio = this.account.totalAssets > 0
+            ? Math.abs(Math.min(0, dailyPnL)) / this.account.totalAssets
+            : 0;
+          if (dailyLossRatio > rule.threshold) {
+            return { allowed: false, reason: `日内亏损已达 ${(dailyLossRatio * 100).toFixed(2)}%，超过限制 ${(rule.threshold * 100).toFixed(0)}%，禁止继续卖出` };
+          }
+        }
+        break;
+      }
     }
 
     return { allowed: true };

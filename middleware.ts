@@ -49,8 +49,12 @@ export async function middleware(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
-  // Whitelist: access-code endpoints, health check
-  if (pathname.startsWith('/api/access-code/') || pathname === '/api/health') {
+  // Whitelist: access-code endpoints, invite endpoints, health check
+  if (
+    pathname.startsWith('/api/access-code/') ||
+    pathname.startsWith('/api/invite/') ||
+    pathname === '/api/health'
+  ) {
     return NextResponse.next();
   }
 
@@ -73,5 +77,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|logos/).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|logos/|reports/).*)'],
 };

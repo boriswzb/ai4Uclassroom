@@ -24,17 +24,17 @@ import { SMA, EMA, ATR, ADX, RSI, BollingerBands, MFI, WilliamsR, Bias, MACD, KD
 import type { FactorRawValues, BarLite } from './types';
 import { computeWQAlphas } from './alphas';
 import { fetchMainNetInflow, estimateMoneyFlowFromKBars, type RealMoneyFlow } from './real-moneyflow';
-import { inferIndustryFromCode } from './neutralize';
+import { getIndustry } from '../../industry-map';
 
 // ── 技术指标（单只）──────────────────────────────────
 function computeTechnical(kbars: KBar[]): {
-  momentum5: number; momentum10: number; momentum20: number; momentum60: number;
+  momentum5: number; momentum10: number; momentum20: number; momentum60: number; momentum120: number;
   rsi14: number; cci14: number; bias20: number;
   macdHist: number; kdjK: number; kdjD: number;
   bollPosition: number; adx: number; lowVolatility: number;
 } {
   const empty = {
-    momentum5: 0, momentum10: 0, momentum20: 0, momentum60: 0,
+    momentum5: 0, momentum10: 0, momentum20: 0, momentum60: 0, momentum120: 0,
     rsi14: 50, cci14: 0, bias20: 0,
     macdHist: 0, kdjK: 50, kdjD: 50,
     bollPosition: 0.5, adx: 0, lowVolatility: 0,
@@ -94,6 +94,7 @@ function computeTechnical(kbars: KBar[]): {
     momentum10: mom(10),
     momentum20: mom(20),
     momentum60: mom(60),
+    momentum120: mom(120),  // v2.1.1：长动量 120 日
     rsi14: isNaN(rsi14) ? 50 : rsi14,
     cci14: isNaN(cci14) ? 0 : cci14,
     bias20: isNaN(bias20) ? 0 : bias20,
@@ -112,6 +113,13 @@ interface FinancialData {
   roe: number; grossMargin: number; debtRatio: number; eps: number;
   marketCap: number; floatMarketCap: number;
   industry: string;
+  // v2.1.1（2026-06-15）：Sloan Accruals 盈余质量因子
+  //   学术定义：(ΔCA - ΔCash - ΔCL - 折旧) / TA
+  //   A 股实现：OCF/NI（经营现金流 / 净利润）作为代理
+  //   OCF/NI > 1 表示利润是真金白银（高质量）；< 0.5 表示大量应收账款（低质量）
+  //   业界证据（Sloan 1996）：低 Accruals 股票年化超额收益 ~6-10%
+  operatingCashFlow: number;  // 经营性现金流（元）
+  netProfit: number;           // 净利润（元）
 }
 
 /**
@@ -129,6 +137,8 @@ export async function fetchFinancials(code: string): Promise<FinancialData> {
     roe: 0, grossMargin: 0, debtRatio: 50, eps: 0,
     marketCap: 0, floatMarketCap: 0,
     industry: '',
+    operatingCashFlow: 0,  // v2.1.1
+    netProfit: 0,           // v2.1.1
   };
 
   try {
@@ -162,34 +172,62 @@ export async function fetchFinancials(code: string): Promise<FinancialData> {
 
 /**
  * 财务数据 from 东财 datacenter
- * 路径：f10 节点
- * 接口：https://emweb.securities.eastmoney.com/PC_HSF10/NewFinanceAnalysis/MainTargetAjax?code=SH600519
+ * 路径：RPT_F10_FINANCE_MAINFINADATA
+ * 接口：https://datacenter.eastmoney.com/securities/api/data/v1/get?reportName=RPT_F10_FINANCE_MAINFINADATA&...
+ *
+ * 历史（已弃用）：原 emweb.securities.eastmoney.com/PC_HSF10/NewFinanceAnalysis/MainTargetAjax
+ *   在服务端 100% 返回 302 重定向到登录页 → 所有股票 roe=0/grossMargin=0/debtRatio=50 defaults
+ *   → percentile 全等 → OLS 残差灌水 → 推荐"全是 100"
+ * 替换为 datacenter.eastmoney.com v1 接口（API 风格，不走页面 cookie 鉴权）
+ * 一次拿全：ROE/毛利率/负债率/EPS/BPS/每股净资产/股本等
  */
 async function fetchFinancialsFromHis(code: string, defaults: FinancialData): Promise<FinancialData> {
   const [num, suffix] = code.split('.');
-  const emCode = (suffix === 'SH' ? 'SH' : 'SZ') + num;
-  const url = `https://emweb.securities.eastmoney.com/PC_HSF10/NewFinanceAnalysis/MainTargetAjax?code=${emCode}&type=0`;
+  // SECUCODE 格式：600519.SH（带后缀），用于 datacenter 接口
+  const secucode = `${num}.${suffix}`;
+
+  // 主源：datacenter.eastmoney.com
+  const url = `https://datacenter.eastmoney.com/securities/api/data/v1/get?reportName=RPT_F10_FINANCE_MAINFINADATA&columns=ALL&filter=(SECUCODE%3D%22${secucode}%22)&client=PC&pageNumber=1&pageSize=1`;
 
   try {
     const res = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://emweb.securities.eastmoney.com/' },
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': 'https://emweb.securities.eastmoney.com/',
+        'Accept': 'application/json',
+      },
       signal: AbortSignal.timeout(5000),
     });
-    if (!res.ok) return defaults;
+    if (!res.ok) {
+      // P1 修复（2026-06-15）：加日志，否则 100% 失败时 dev server 看不到原因
+      console.warn(`[fetchFinancials] ${code} HTTP ${res.status} from datacenter, fallback to defaults`);
+      return defaults;
+    }
     const json = await res.json();
-    if (!json.data || !Array.isArray(json.data)) return defaults;
-    // data[0] = 最新报告期, data[1] = 上一期
-    const latest = json.data[0];
-    if (!latest) return defaults;
+    if (!json?.result?.data || !Array.isArray(json.result.data) || json.result.data.length === 0) {
+      console.warn(`[fetchFinancials] ${code} empty data from datacenter (success=${json?.success} msg=${json?.message}), fallback to defaults`);
+      return defaults;
+    }
+    // data[0] = 最新报告期
+    const latest = json.result.data[0];
     return {
       ...defaults,
-      roe: parseFloat(latest.ROEJQ || latest.ROE || '0') || 0,
-      grossMargin: parseFloat(latest.GROSSPROFITMARGIN || latest.xsmll || '0') || 0,
-      debtRatio: parseFloat(latest.LIABILITYRATIO || latest.zcfzl || '50') || 50,
-      eps: parseFloat(latest.BASIC_EPS || latest.jbmgsy || '0') || 0,
-      // 行业从主营构成拿（简化）
+      // ROE 字段：MAINFINADATA 用 ROEJQ（季报 ROE %），如茅台 10.57 = 10.57%
+      roe: parseFloat(latest.ROEJQ || '0') || 0,
+      // 销售毛利率（%）：XSMLL
+      grossMargin: parseFloat(latest.XSMLL || '0') || 0,
+      // 资产负债率（%）：ZCFZL，如茅台 12.12 = 12.12%
+      debtRatio: parseFloat(latest.ZCFZL || '50') || 50,
+      // 基本每股收益（元）：EPSJB
+      eps: parseFloat(latest.EPSJB || '0') || 0,
+      // v2.1.1（2026-06-15）：Sloan Accruals 盈余质量
+      //   经营现金流（元）：JYJXJL（经营活动产生的现金流量净额）
+      operatingCashFlow: parseFloat(latest.JYJXJL || '0') || 0,
+      //   净利润（元）：净利润 JLR
+      netProfit: parseFloat(latest.JLR || latest.NETPROFIT || '0') || 0,
     };
-  } catch {
+  } catch (e) {
+    console.warn(`[fetchFinancials] ${code} fetch error: ${(e as Error).message}, fallback to defaults`);
     return defaults;
   }
 }
@@ -237,6 +275,15 @@ export async function computeFactors(input: ComputeFactorsInput): Promise<Factor
   // 3. 财务数据（异步，并发其他）
   const fin = await fetchFinancials(code);
 
+  // v2.1.1（2026-06-15）：Sloan Accruals 盈余质量代理
+  //   OCF/NI 缺失处理：
+  //     - netProfit=0（亏损股）→ accrualsRatio = 1.0（中性，让 pct 排中位）
+  //     - operatingCashFlow=0（接口失败）→ 同上
+  //     - 负 netProfit + 正 OCF → 1.5（特殊情况：亏本但有现金）
+  const accrualsRatio = fin.netProfit > 0 && fin.operatingCashFlow !== 0
+    ? fin.operatingCashFlow / fin.netProfit
+    : 1.0;
+
   // 4. 流动性（20 日均成交额）
   const avgAmount20d = kbars.length >= 20
     ? kbars.slice(-20).reduce((s, k) => s + (k.amount || 0), 0) / 20
@@ -245,8 +292,8 @@ export async function computeFactors(input: ComputeFactorsInput): Promise<Factor
   // 5. WorldQuant 10 alpha
   const wqAlphaScore = computeWQAlphas(kbars);
 
-  // 6. 行业
-  const industry = inferIndustryFromCode(code) || '';
+  // 6. 行业（v3.0.1 2026-06-15：用 industry-map.ts 静态映射，比 inferIndustryFromCode 更准）
+  const industry = getIndustry(code);
 
   return {
     code, name,
@@ -263,11 +310,13 @@ export async function computeFactors(input: ComputeFactorsInput): Promise<Factor
     grossMargin: fin.grossMargin,
     debtRatio: fin.debtRatio,
     eps: fin.eps,
+    accrualsRatio,  // v2.1.1
 
     momentum5: tech.momentum5,
     momentum10: tech.momentum10,
     momentum20: tech.momentum20,
     momentum60: tech.momentum60,
+    momentum120: tech.momentum120,  // v2.1.1：长动量
 
     rsi14: tech.rsi14,
     cci14: tech.cci14,

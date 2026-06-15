@@ -105,6 +105,9 @@ export class LiveSimulator {
   // Bug2 fix: 关联的账户ID（restore 时注入，用于成交时持久化 buyDate）
   private accountId: string | null = null;
 
+  /** 当日是否已写入净值（YYYYMMDD 字符串），避免重复 */
+  private lastEquityRecordedDay: string | null = null;
+
   // Phase 1: 历史K线缓存（用于高级止损和市场状态分析）
   private kbarsCache: Map<string, KBar[]> = new Map();
   // P1-1 修复：实时报价缓存（用于 fillOrder/processOrderBook/止损检查，不再用 random）
@@ -381,12 +384,12 @@ export class LiveSimulator {
 
         // P1-1 修复：拉取实时报价并写入缓存
         // 优先用实时价更新 positionManager；缓存缺失时 fallback 到 bar.close
-        try {
-          const quotes = await dataSourceManager.getRealtimeQuote([code]);
-          if (quotes && quotes.length > 0 && quotes[0].price > 0) {
-            this.realtimeCache.set(code, { price: quotes[0].price, timestamp: Date.now() });
-          }
-        } catch { /* realtime 拉取失败不影响主流程 */ }
+        // P1-Fix：用直接拉 /api/stock/realtime 的 helper 替代 dataSourceManager.getRealtimeQuote，
+        // 因为后者在 Node 后端调相对 URL 会失败（被 catch 静默吞掉 → 实时价永远进不来）。
+        const directPrice = await this.fetchRealtimeQuoteDirect(code);
+        if (directPrice !== null) {
+          this.realtimeCache.set(code, { price: directPrice, timestamp: Date.now() });
+        }
 
         const cachedRealtime = this.realtimeCache.get(code);
         // 修复 P1-B：实时报价缓存 5 分钟内才用，否则 fallback 到 bar.close
@@ -449,98 +452,208 @@ export class LiveSimulator {
     this.updateAccount();
     this.notifyAccount();
     this.processOrderBook();
+    // 每日净值记录：每个交易日收盘后写一次（15:00 后）—— 用于 IDB equityPoints
+    // 引擎只写一次/天（按 todayStr 去重），前端 sparkline 才有数据
+    if (hour === 15 && minute === 0 && todayStr !== this.lastEquityRecordedDay) {
+      this.recordEquityPointIfReady(todayStr).catch(e => {
+        console.warn('[LiveSimulator] recordEquityPoint failed:', e);
+      });
+    }
   }
 
   // ==================== 信号执行 ====================
 
+  /**
+   * 信号执行（按强度分级）
+   * ──────────────────────────────────────────────────────────────────
+   * 决策表（基于 signal.strength 0-1）：
+   *
+   *   无持仓 + long            → 开仓（按 7 步 positionSizer 计算）
+   *   无持仓 + short           → 不操作（A股不能裸卖空）
+   *   有持仓 + long (≥0.6)     → 加仓（按剩余 maxRatio 算可加量）
+   *   有持仓 + long (<0.6)     → 不操作（已持仓，信号不强）
+   *   有持仓 + short (≥0.8)    → 全平清仓
+   *   有持仓 + short (0.5-0.8) → 减仓 50%
+   *   有持仓 + short (0.3-0.5) → 减仓 33%
+   *   有持仓 + short (<0.3)    → 不操作（信号太弱，保留观察）
+   *
+   * 升级点（vs 旧版二元决策）：
+   *   ① 加仓：已持仓+强 long 信号可以加仓（复用 positionSizer 加仓量计算）
+   *   ② 分级卖出：信号强度决定减仓比例，避免轻微看空就吓跑
+   *   ③ 硬上限 1000 股 → 按 maxOrderAmount 计算（避免高价股完全无法下单）
+   *   ④ T+1 检查统一前置，避免重复逻辑
+   */
   private async executeSignal(signal: Signal, bar: KBar, todayStr: string): Promise<void> {
     if (!this.isAutoPilot) return;
 
     const code = signal.code;
     const position = this.positionManager.getPosition(code);
+    const strength = signal.strength ?? 1.0;
 
-    // 多头信号 → 买入
-    if (signal.direction === 'long') {
-      if (!position || position.volume === 0) {
-        // 检查是否今日已买（t+1）
-        // Bug2 fix: 同时检查 buyRecords 和 positionManager 中的 buyDate，避免 buyRecords 重启后丢失导致 T+1 失效
-        const todayBought = this.buyRecords.some(r => r.code === code && r.date === todayStr)
-          || (this.positionManager.getBuyDate(code) === todayStr);
-        if (todayBought) {
-          this.log('warn', `${code} 今日已买入（T+1限制），跳过`);
-          return;
-        }
-
-        // Phase 1 增强：动态仓位计算
-        // 1. 先更新市场状态（用于调整仓位倍数）
-        if (this.kbarsCache?.has(code)) {
-          this.marketClassifier.updateBars(this.kbarsCache.get(code)!);
-          const regimeResult = this.marketClassifier.analyze();
-          this.currentRegime = regimeResult.regime;
-        }
-
-        // 2. 获取ATR用于计算仓位
-        let atr = bar.close * 0.02; // 默认代理值
-        if (this.kbarsCache?.has(code) && this.kbarsCache.get(code)!.length >= 15) {
-          const cached = this.kbarsCache.get(code)!;
-          atr = PositionSizer.computeATR(cached);
-        }
-
-        // 3. 用 PositionSizer 计算建议仓位
-        const sizeResult = this.positionSizer.calculate(
-          bar.close,
-          atr,
-          signal.strength,
-        );
-
-        // 根据市场状态调整仓位倍数
-        const regimeMultipliers: Record<string, number> = {
-          strong_uptrend: 1.2, weak_uptrend: 1.0,
-          strong_downtrend: 0.8, weak_downtrend: 0.7,
-          high_volatility: 0.6, low_volatility: 1.0,
-          uncertain: 0.5,
-        };
-        const regimeMultiplier = regimeMultipliers[this.currentRegime] ?? 1.0;
-        const adjustedShares = Math.floor(sizeResult.shares * regimeMultiplier / 100) * 100;
-
-        if (adjustedShares < 100) {
-          this.log('warn', `${code} 计算仓位不足1手（${adjustedShares}股），跳过`);
-          return;
-        }
-
-        const volume = Math.min(adjustedShares, 1000); // 上限1000股
-        const order = await this.submitOrder(code, 'long', 'market', volume);
-        if (order.status === 'filled') {
-          // 记录买入（t+1）
-          this.buyRecords.push({ code, date: todayStr, volume });
-          // 记录高级止损入场价
-          this.advancedStopManager.openPosition(code, bar.close, volume, 'long', bar.timestamp, atr);
-          // 更新仓位管理器余额
-          this.positionSizer.updateBalance(this.account.cash);
-          this.log('trade', `买入 ${code} × ${volume}股（市场状态:${this.currentRegime}，仓位调整:${regimeMultiplier.toFixed(1)}×）`);
-        }
-      }
+    // ── T+1 通用前置：今日已买则不操作（买/卖/加仓都受 T+1 约束）──
+    //   注：A股 T+1 规则——当日买入次日才能卖出，但对加仓/减仓也适用
+    //   （已持仓 + 加仓 = 又一笔买入，仍受 T+1 约束）
+    const todayBought =
+      this.buyRecords.some(r => r.code === code && r.date === todayStr) ||
+      (this.positionManager.getBuyDate(code) === todayStr);
+    if (todayBought) {
+      this.log('warn', `${code} 今日已交易（T+1限制），跳过信号 [${signal.direction} @ ${strength.toFixed(2)}]`);
+      return;
     }
-    // 空头信号 → 卖出
-    else if (signal.direction === 'short') {
-      if (position && position.volume > 0) {
-        // 实际检查t+1：今日买的不能卖
-        // Bug2 fix: 同时检查 buyRecords 和 positionManager 中的 buyDate
-        const todayBought = this.buyRecords.some(r => r.code === code && r.date === todayStr)
-          || (this.positionManager.getBuyDate(code) === todayStr);
-        if (todayBought) {
-          this.log('warn', `${code} 今日买入不能卖出（T+1），跳过`);
-          return;
-        }
 
-        const order = await this.submitOrder(code, 'short', 'market', position.volume);
-        if (order.status === 'filled' && order.filledVolume >= order.volume) {
-          // Bug3 fix: 只有全部成交时才清除 T+1 记录
+    // ── 1) 无持仓 + long → 开仓 ──
+    if (signal.direction === 'long' && (!position || position.volume === 0)) {
+      await this.openPositionBySignal(code, bar, todayStr, strength, /*isAdd=*/false);
+      return;
+    }
+
+    // ── 2) 有持仓 + long (≥0.6) → 加仓 ──
+    if (signal.direction === 'long' && position && position.volume > 0 && strength >= 0.6) {
+      // 检查是否已加仓过（防止同日反复加仓）
+      const lastAddDate = (position as any).lastAddDate;
+      if (lastAddDate === todayStr) {
+        this.log('warn', `${code} 今日已加仓，跳过本次加仓信号`);
+        return;
+      }
+      await this.openPositionBySignal(code, bar, todayStr, strength, /*isAdd=*/true);
+      return;
+    }
+
+    // ── 3) 有持仓 + long (<0.6) → 不操作（已持仓，信号不强就不加仓）──
+    if (signal.direction === 'long' && position && position.volume > 0) {
+      this.log('info', `${code} 已有持仓 ${position.volume}股，信号强度 ${strength.toFixed(2)} < 0.6，跳过加仓`);
+      return;
+    }
+
+    // ── 4) 有持仓 + short → 分级卖出 ──
+    if (signal.direction === 'short' && position && position.volume > 0) {
+      let sellRatio: number;
+      if (strength >= 0.8) {
+        sellRatio = 1.0;  // 全平清仓（强转弱）
+      } else if (strength >= 0.5) {
+        sellRatio = 0.5;  // 减仓 50%
+      } else if (strength >= 0.3) {
+        sellRatio = 1 / 3; // 减仓 33%
+      } else {
+        this.log('info', `${code} 信号强度 ${strength.toFixed(2)} < 0.3，太弱，保留持仓观察`);
+        return;
+      }
+
+      const sellVolume = Math.floor((position.volume * sellRatio) / 100) * 100; // 取整到 100 股
+      if (sellVolume < 100) {
+        this.log('warn', `${code} 减仓计算不足1手（${sellVolume}股），改为全平`);
+        // 兜底：减仓后不足 1 手时直接全平
+        const fullOrder = await this.submitOrder(code, 'short', 'market', position.volume);
+        if (fullOrder.status === 'filled') {
           this.buyRecords = this.buyRecords.filter(r => r.code !== code);
-          // 清除高级止损记录
+          this.advancedStopManager.closePosition(code);
+          this.positionSizer.updateBalance(this.account.cash);
+          this.log('trade', `全平 ${code} × ${position.volume}股（减仓 ${(sellRatio * 100).toFixed(0)}% 计算不足1手兜底）`);
+        }
+        return;
+      }
+
+      const order = await this.submitOrder(code, 'short', 'market', sellVolume);
+      if (order.status === 'filled' && order.filledVolume >= order.volume) {
+        // 只有全部成交才清 T+1 记录（Bug3 fix）
+        if (sellRatio >= 1.0) {
+          this.buyRecords = this.buyRecords.filter(r => r.code !== code);
           this.advancedStopManager.closePosition(code);
         }
+        this.positionSizer.updateBalance(this.account.cash);
+        const action = sellRatio >= 1.0 ? '清仓' : sellRatio >= 0.5 ? '减仓50%' : '减仓33%';
+        this.log('trade', `${action} ${code} × ${sellVolume}股（信号强度 ${strength.toFixed(2)}，比例 ${(sellRatio * 100).toFixed(0)}%）`);
       }
+      return;
+    }
+
+    // ── 5) 无持仓 + short → 不操作（A股不能裸卖空）──
+    if (signal.direction === 'short') {
+      this.log('info', `${code} 无持仓，short 信号不操作（A 股不允许裸卖空）`);
+      return;
+    }
+  }
+
+  /**
+   * 开仓 / 加仓（共用方法，按 7 步 positionSizer 计算仓位）
+   * @param isAdd true=加仓（已持仓），false=开仓
+   */
+  private async openPositionBySignal(
+    code: string,
+    bar: KBar,
+    todayStr: string,
+    strength: number,
+    isAdd: boolean,
+  ): Promise<void> {
+    // 1. 市场状态分类
+    if (this.kbarsCache?.has(code)) {
+      this.marketClassifier.updateBars(this.kbarsCache.get(code)!);
+      const regimeResult = this.marketClassifier.analyze();
+      this.currentRegime = regimeResult.regime;
+    }
+
+    // 2. ATR 计算
+    let atr = bar.close * 0.02; // 默认代理值
+    if (this.kbarsCache?.has(code) && this.kbarsCache.get(code)!.length >= 15) {
+      atr = PositionSizer.computeATR(this.kbarsCache.get(code)!);
+    }
+
+    // 3. 7 步仓位计算（positionSizer.calculate）
+    const sizeResult = this.positionSizer.calculate(bar.close, atr, strength);
+
+    // 4. 市场状态倍数
+    const regimeMultipliers: Record<string, number> = {
+      strong_uptrend: 1.2, weak_uptrend: 1.0,
+      strong_downtrend: 0.8, weak_downtrend: 0.7,
+      high_volatility: 0.6, low_volatility: 1.0,
+      uncertain: 0.5,
+    };
+    const regimeMultiplier = regimeMultipliers[this.currentRegime] ?? 1.0;
+    let targetShares = Math.floor(sizeResult.shares * regimeMultiplier / 100) * 100;
+
+    // ── P2: 加仓时检查剩余可加量（maxRatio - 当前持仓占比）──
+    if (isAdd) {
+      const position = this.positionManager.getPosition(code)!;
+      const currentValue = position.volume * bar.close;
+      const accountBalance = this.account.cash + this.account.totalAssets - this.account.cash + currentValue; // 简化：用 totalAssets
+      const maxTotalValue = this.account.totalAssets * ((this.positionSizer as any).config?.maxPositionRatio ?? 0.3);
+      const remainingRoom = Math.max(0, maxTotalValue - currentValue);
+      const remainingShares = Math.floor(remainingRoom / bar.close / 100) * 100;
+      if (remainingShares < 100) {
+        this.log('warn', `${code} 已达 maxPositionRatio 上限，无法加仓`);
+        return;
+      }
+      targetShares = Math.min(targetShares, remainingShares);
+      this.log('info', `${code} 加仓空间：剩余 ${remainingShares}股，本次计算 ${targetShares}股`);
+    }
+
+    // ── P3: 硬上限改为按金额（maxOrderAmount）──
+    //   旧版固定 1000 股，对高价股（>500元）根本下不了单
+    //   新版：maxOrderAmount = max(1000股当前金额, maxOrderAmount)
+    //   其中 maxOrderAmount 来自 RiskEngine.SingleOrderLimitRule.threshold（默认 10万）
+    const singleOrderLimit = (this.riskEngine.getRule('single_order_limit') as any)?.threshold ?? 100000;
+    const maxOrderShares = Math.floor(singleOrderLimit / bar.close / 100) * 100;
+    const volume = Math.max(0, Math.min(targetShares, maxOrderShares));
+
+    if (volume < 100) {
+      this.log('warn', `${code} 计算仓位不足1手（${volume}股），跳过${isAdd ? '加仓' : '开仓'}`);
+      return;
+    }
+
+    const order = await this.submitOrder(code, 'long', 'market', volume);
+    if (order.status === 'filled') {
+      if (!isAdd) {
+        // 开仓：记录首次买入日（T+1）
+        this.buyRecords.push({ code, date: todayStr, volume });
+        this.advancedStopManager.openPosition(code, bar.close, volume, 'long', bar.timestamp, atr);
+      } else {
+        // 加仓：记录加仓日（防同日多次加仓）+ 更新 advancedStopManager
+        (this.positionManager as any).positions.get(code) &&
+          ((this.positionManager as any).positions.get(code).lastAddDate = todayStr);
+        this.advancedStopManager.openPosition(code, bar.close, volume, 'long', bar.timestamp, atr);
+      }
+      this.positionSizer.updateBalance(this.account.cash);
+      this.log('trade', `${isAdd ? '加仓' : '开仓'} ${code} × ${volume}股 @ ¥${bar.close.toFixed(2)}（信号强度 ${strength.toFixed(2)}，市场状态 ${this.currentRegime}，倍数 ${regimeMultiplier.toFixed(1)}×）`);
     }
   }
 
@@ -684,12 +797,39 @@ export class LiveSimulator {
     const result = this.riskEngine.checkPosition(position);
     if (result.triggered) {
       this.log('warn', `触发风控 ${code}，强制平仓`);
+      // 广播风控触发事件 → 前端弹通知 + 写事件流水
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('quant:risk-triggered', {
+          detail: {
+            code,
+            name: (position as any).name || code,
+            type: 'risk_rule',
+            reason: result.reason || '风控规则触发',
+            price: priceForRisk,
+            pnl: (priceForRisk - position.avgCost) * position.volume,
+            timestamp: Date.now(),
+          },
+        }));
+      }
       this.submitOrder(code, 'short', 'market', position.volume);
     }
 
     const dailyResult = this.riskEngine.checkDailyLoss();
     if (dailyResult.triggered) {
       this.log('error', '触发日亏损限制，停止交易');
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('quant:risk-triggered', {
+          detail: {
+            code: 'ALL',
+            name: '账户',
+            type: 'daily_loss_limit',
+            reason: dailyResult.reason || '日亏损限制',
+            price: 0,
+            pnl: 0,
+            timestamp: Date.now(),
+          },
+        }));
+      }
       this.stop();
     }
 
@@ -703,6 +843,20 @@ export class LiveSimulator {
           ? (priceForRisk - position.avgCost) * position.volume
           : 0;
         this.log('warn', `高级止损触发 ${code}: ${stopResult.reason} → 强制平仓（浮盈${pnl.toFixed(0)}元）`);
+        // 广播风控触发事件
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('quant:risk-triggered', {
+            detail: {
+              code,
+              name: (position as any).name || code,
+              type: stopResult.action || 'stop_loss',
+              reason: stopResult.reason || '止损/止盈触发',
+              price: priceForRisk,
+              pnl,
+              timestamp: Date.now(),
+            },
+          }));
+        }
         this.submitOrder(code, 'short', 'market', position.volume);
         this.advancedStopManager.closePosition(code);
       }
@@ -710,6 +864,94 @@ export class LiveSimulator {
   }
 
   // ==================== 账户 ====================
+
+  /**
+   * P0 Bug 修复：非交易时段持仓 currentPrice 未刷新
+   * ──────────────────────────────────────────────────────────────────
+   * 原问题：update() 循环只在交易时段跑（9:30-11:30, 13:00-15:00），
+   *         positionManager 内部持仓的 currentPrice 停留在成本价，
+   *         导致 PnL/marketValue 显示失真（用户在休市时看到 unrealizedPnL=0）。
+   *
+   * 修复：直接用 dataSourceManager.getRealtimeQuote 拉所有持仓的实时报价，
+   *       写入 positionManager。简单直接 —— 既然有现成的实时数据接口，
+   *       就不用走 K 线缓存兜底那条更绕的路。
+   *
+   * 数据源优先级：realtimeCache（5min 内）> dataSourceManager.getRealtimeQuote 实时拉取。
+   */
+  public async refreshHoldingPrices(): Promise<number> {
+    const positions = this.positionManager.getAllPositions();
+    if (positions.length === 0) return 0;
+    let updated = 0;
+    for (const pos of positions) {
+      const code = pos.code;
+      // 1. 优先：5 分钟内的实时报价缓存（交易时段已被 update() 填好）
+      const cached = this.realtimeCache.get(code);
+      if (cached && Date.now() - cached.timestamp < 5 * 60_000 && cached.price > 0) {
+        if (Math.abs(pos.currentPrice - cached.price) > 0.001) {
+          this.positionManager.updatePrice(code, cached.price);
+          updated++;
+        }
+        continue;
+      }
+      // 2. Fallback：直接拉实时报价。
+      //   P1-Fix：dataSourceManager.getRealtimeQuote 内部走的是相对 URL fetch，
+      //   在 Node.js 后端调用时会抛 "Failed to parse URL" 被 catch 静默吞掉，
+      //   导致开盘后引擎 tick 永远拿不到新价、realtimeCache 卡在集合竞价快照。
+      //   改用绝对 URL helper（fetchRealtimeQuoteDirect）。
+      const directPrice = await this.fetchRealtimeQuoteDirect(code);
+      if (directPrice !== null) {
+        this.realtimeCache.set(code, { price: directPrice, timestamp: Date.now() });
+        const diff = Math.abs((pos.currentPrice || 0) - directPrice);
+        console.log(`[refreshHoldingPrices] ${code}: pos.currentPrice=${pos.currentPrice}, directPrice=${directPrice}, diff=${diff.toFixed(3)}, willUpdate=${diff > 0.001}`);
+        if (diff > 0.001) {
+          this.positionManager.updatePrice(code, directPrice);
+          updated++;
+        }
+      }
+    }
+    return updated;
+  }
+
+  /**
+   * P1-Fix：Node.js 后端 fetch 必须用绝对 URL（dataSourceManager 内部走相对 URL 会抛
+   * "Failed to parse URL" 然后被 catch 静默吞掉）。直接拉 /api/stock/realtime 这个服务端 route，
+   * 避免依赖 dataSourceManager 在 Node 环境的兼容性。
+   */
+  private async fetchRealtimeQuoteDirect(code: string): Promise<number | null> {
+    try {
+      const port = process.env.PORT || '3000';
+      const host = process.env.QUANT_API_HOST || `http://127.0.0.1:${port}`;
+      const url = `${host}/api/stock/realtime?codes=${encodeURIComponent(code)}`;
+      const res = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+      const json: any = await res.json();
+      if (json?.success && Array.isArray(json.data) && json.data.length > 0) {
+        const q = json.data[0];
+        if (q?.price && q.price > 0) return q.price;
+      }
+    } catch { /* 静默失败 — 主流程不依赖实时价也能跑（fallback 到 bar.close） */ }
+    return null;
+  }
+
+  /**
+   * 写入每日净值（用于 IDB equityPoints，供前端 sparkline/净值曲线渲染）
+   * ──────────────────────────────────────────────────────────────────
+   * 时机：交易日 15:00 后引擎每 30s 检测一次，每天只写一次。
+   * 通过 simulatorPersistence 写入 IDB（避免在 Node 端 import db）。
+   */
+  private async recordEquityPointIfReady(todayStr: string): Promise<void> {
+    if (this.lastEquityRecordedDay === todayStr) return;
+    if (!this.accountId) return;
+    // 浏览器端才写
+    if (typeof window === 'undefined') return;
+    this.lastEquityRecordedDay = todayStr;
+    try {
+      const { simulatorPersistence } = await import('../store/simulator-persistence');
+      await simulatorPersistence.recordEquityPoint(this.accountId);
+      this.log('info', `📊 已记录 ${todayStr} 净值快照`);
+    } catch (e) {
+      console.warn('[LiveSimulator] recordEquityPoint error:', e);
+    }
+  }
 
   public updateAccount(): void {
     const positions = this.positionManager.getAllPositions();
@@ -822,6 +1064,7 @@ export class LiveSimulator {
     this.kbarsCache.clear();
     this.currentRegime = 'uncertain';
     this.advancedStopManager.clearAll();
+    this.lastEquityRecordedDay = null;
 
     const cash = initialCash || 1000000;
     this.account = {
@@ -840,6 +1083,92 @@ export class LiveSimulator {
   /** Bug2 fix: 注入 accountId（restore 时调用），使成交时能将 buyDate 写入 db.positions */
   setAccountId(accountId: string): void {
     this.accountId = accountId;
+  }
+
+  /**
+   * 实时更新风控设置（速览模式 ⏰ 风险设置面板调用，UI 改动即时生效）
+   *
+   * 应用到三处内置风控：
+   *   1. RiskEngine.StopLossRule（基础止损）
+   *   2. RiskEngine.StopProfitRule（基础止盈）
+   *   3. RiskEngine.PositionLimitRule（按总资产比例 → 手数）
+   *   4. AdvancedPositionManager.stopConfig（高级止损/止盈，含 ATR、移动止盈）
+   *   5. RiskEngine.setRuleEnabled（启用/禁用全部风控）
+   *
+   * @param settings 风险设置（与 app/quant/page.tsx RiskSettings 同步）
+   */
+  updateRiskSettings(settings: {
+    stopLossPct: number;        // 个股止损 %（负数，如 -8 表示跌 8% 触发）
+    takeProfitPct: number;      // 个股止盈 %（如 20）
+    maxPositionPct: number;     // 单只最大持仓占总资产 %（如 20）
+    maxTotalPositions: number;  // 策略池最多 N 只（如 10）
+    enabled: boolean;           // 是否启用风控（启用 = 应用全部；禁用 = 关掉所有规则）
+  }): { applied: boolean; changes: string[] } {
+    const changes: string[] = [];
+
+    // 1) RiskEngine 基础止损规则（绝对值）
+    const stopLossRule = this.riskEngine.getRule('stop_loss') as any;
+    if (stopLossRule && typeof stopLossRule.threshold === 'number') {
+      const newThreshold = Math.abs(settings.stopLossPct) / 100; // -8 → 0.08
+      if (Math.abs(stopLossRule.threshold - newThreshold) > 0.0001) {
+        stopLossRule.threshold = newThreshold;
+        changes.push(`止损阈值 ${(newThreshold * 100).toFixed(1)}%`);
+      }
+    }
+
+    // 2) RiskEngine 基础止盈规则
+    const stopProfitRule = this.riskEngine.getRule('stop_profit') as any;
+    if (stopProfitRule && typeof stopProfitRule.threshold === 'number') {
+      const newThreshold = settings.takeProfitPct / 100; // 20 → 0.20
+      if (Math.abs(stopProfitRule.threshold - newThreshold) > 0.0001) {
+        stopProfitRule.threshold = newThreshold;
+        changes.push(`止盈阈值 ${(newThreshold * 100).toFixed(1)}%`);
+      }
+    }
+
+    // 3) PositionLimitRule 改为「策略池最多 N 只」语义（注意：原阈值是手数，这里直接用只数）
+    //    原代码 PositionLimitRule(100) = 最大 100 手；改为只数更直观
+    const positionLimitRule = this.riskEngine.getRule('position_limit') as any;
+    if (positionLimitRule && typeof positionLimitRule.threshold === 'number') {
+      if (positionLimitRule.threshold !== settings.maxTotalPositions) {
+        positionLimitRule.threshold = settings.maxTotalPositions;
+        changes.push(`策略池上限 ${settings.maxTotalPositions} 只`);
+      }
+    }
+
+    // 4) AdvancedPositionManager.stopConfig（高级止损/止盈，与基础规则保持同步）
+    //    fixedStopLoss/fixedStopProfit 是绝对值
+    this.advancedStopManager.updateConfig({
+      fixedStopLoss: Math.abs(settings.stopLossPct) / 100,
+      fixedStopProfit: settings.takeProfitPct / 100,
+    });
+
+    // 4b) PositionSizer.config.maxPositionRatio（单只最大占比 = 占总资产%）
+    //    这是真正影响"下单时算多少股"的计算（line 185 in position-sizer.ts）
+    if (this.positionSizer) {
+      const newRatio = settings.maxPositionPct / 100;
+      const currentRatio = (this.positionSizer as any).config?.maxPositionRatio;
+      if (typeof currentRatio === 'number' && Math.abs(currentRatio - newRatio) > 0.0001) {
+        (this.positionSizer as any).config.maxPositionRatio = newRatio;
+        changes.push(`单只占比上限 ${(newRatio * 100).toFixed(1)}%`);
+      }
+    }
+
+    // 5) 全局启用/禁用风控（一次切所有规则）
+    const enabled = settings.enabled;
+    for (const rule of this.riskEngine.getAllRules()) {
+      if (rule.enabled !== enabled) {
+        this.riskEngine.setRuleEnabled(rule.id, enabled);
+      }
+    }
+    if (changes.length > 0) {
+      changes.unshift(enabled ? '✅ 风控已启用' : '⏸ 风控已禁用');
+    } else {
+      changes.push(enabled ? '✅ 风控已启用（无阈值变化）' : '⏸ 风控已禁用（无阈值变化）');
+    }
+
+    this.log('info', `[风控更新] ${changes.join(' · ')}`);
+    return { applied: true, changes };
   }
 
   /**
