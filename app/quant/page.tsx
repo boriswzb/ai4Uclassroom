@@ -3462,7 +3462,7 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
   const [backtestTopN, setBacktestTopN] = useState(10);
 
   // 直接读因子研究页写入的 IndexedDB 缓存
-  // 与 /quant/factor-analysis 页"个股排行"100% 同一份数据
+  // 与 /quant/factor-analysis-v2 页"个股排行"100% 同一份数据
   // V1/V2 通过 scoreVersion 字段隔离，切版本不重跑
   const fetchPicks = useCallback(async (selectedPeriod: '5d' | '20d', selectedVersion: 'v1' | 'v2' = scoreVersion) => {
     setLoading(true);
@@ -4940,7 +4940,7 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-500 text-sm">
           <p>暂无{period === '5d' ? '5日' : '20日'}因子评分数据</p>
           <p className="text-xs mt-2 text-slate-600">
-            点上方「⚡ 一键分析」即可，30-60秒出结果 · 或前往 <a href="/quant/factor-analysis" className="text-amber-400 hover:text-amber-300 underline">因子研究页</a>
+            点上方「⚡ 一键分析」即可，30-60秒出结果 · 或前往 <a href="/quant/factor-analysis-v2" className="text-amber-400 hover:text-amber-300 underline">因子研究页</a>
           </p>
         </div>
       ) : (
@@ -8600,7 +8600,7 @@ function getISOWeekKey(d: Date): string {
 function AdvancedFeatures() {
   const [open, setOpen] = useState(false);
   const modules = [
-    { title: '因子研究', desc: 'IC/IR 验证 · 多因子权重 · 失效预警', icon: '📊', href: '/quant/factor-analysis' },
+    { title: '因子研究', desc: 'IC/IR 验证 · 多因子权重 · 失效预警', icon: '📊', href: '/quant/factor-analysis-v2' },
     { title: '个股回测', desc: '单股历史回测 · 12 策略', icon: '📈', href: '/quant/pro#backtest' },
     { title: '组合回测', desc: '多因子组合 · 调仓 · 归因', icon: '🎯', href: '/quant/pro#factor-portfolio' },
     { title: '下载中心', desc: 'APK/PPTX/PDF/数据 一键下载', icon: '📦', href: '/quant/pro#downloads' },

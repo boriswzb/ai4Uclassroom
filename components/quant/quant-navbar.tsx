@@ -8,7 +8,7 @@ type TabType = 'backtest' | 'factor-portfolio' | 'simulator' | 'monitor' | 'stra
 const TABS: { id: TabType; label: string; icon: string; href: string }[] = [
   { id: 'home',            label: '首页',    icon: '🏠',   href: '/quant' },
   { id: 'screener',        label: '智能选股', icon: '🎯',   href: '/quant#screener' },
-  { id: 'factor-analysis', label: '因子研究', icon: '📊',   href: '/quant/factor-analysis' },
+  { id: 'factor-analysis', label: '因子研究', icon: '📊',   href: '/quant/factor-analysis-v2' },
   { id: 'factor-portfolio', label: '组合回测', icon: '🎲', href: '/quant#factor-portfolio' },
   { id: 'backtest',       label: '个股回测', icon: '📈',   href: '/quant#backtest' },
   { id: 'monitor',        label: '盯盘',    icon: '📡',   href: '/quant#monitor' },

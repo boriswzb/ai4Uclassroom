@@ -232,7 +232,7 @@ function AnalyzeStep() {
         })}
       </div>
       <a
-        href="/quant/factor-analysis"
+        href="/quant/factor-analysis-v2"
         className="block w-full py-2.5 bg-blue-600 hover:bg-blue-500 rounded-xl text-center text-sm font-medium text-white transition-colors"
       >
         打开因子分析 →
@@ -296,7 +296,7 @@ function MonitorStep({ onNavigate }: { onNavigate: (tab: TabType) => void }) {
       {watchlist.length === 0 ? (
         <div className="bg-slate-800/60 rounded-xl p-4 mb-4 text-center">
           <p className="text-slate-500 text-xs mb-3">暂无自选股</p>
-          <a href="/quant/factor-analysis" className="text-blue-400 text-xs hover:text-blue-300">
+          <a href="/quant/factor-analysis-v2" className="text-blue-400 text-xs hover:text-blue-300">
             去因子分析添加 →
           </a>
         </div>
@@ -449,7 +449,7 @@ function WorkflowSection({ onNavigate }: { onNavigate: (tab: TabType) => void })
         <FlowCard
           step={FLOW_STEPS[0]}
           active={currentStep === 'analyze'}
-          onJump={() => { window.location.href = '/quant/factor-analysis'; }}
+          onJump={() => { window.location.href = '/quant/factor-analysis-v2'; }}
         >
           <AnalyzeStep />
         </FlowCard>

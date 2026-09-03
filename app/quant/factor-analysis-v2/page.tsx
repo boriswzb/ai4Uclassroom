@@ -375,12 +375,6 @@ export default function FactorAnalysisV2Page() {
               8 大类因子（估值/质量/动量/反转/资金流/技术/换手/WQ Alpha） + 截面百分位 + 行业/市值中性化 + IC 动态定权
             </p>
           </div>
-          <a
-            href="/quant/factor-analysis"
-            className="text-sm text-slate-400 hover:text-slate-200 px-3 py-1.5 border border-slate-700 rounded-lg"
-          >
-            ← 旧版 v1
-          </a>
         </div>
 
         {/* Tabs */}
