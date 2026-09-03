@@ -103,20 +103,38 @@ function StockChip({
  */
 function ApplyStrategyButton({ 
   strategy, 
-  onClick 
+  onClick,
+  disabled
 }: { 
   strategy?: string; 
   onClick?: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
-      className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 transition-colors"
+      disabled={disabled}
+      className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
     >
-      <span>应用策略</span>
-      {strategy && <span className="text-green-200">({strategy})</span>}
+      <span>{disabled ? '⏳ 应用中…' : '应用策略'}</span>
+      {!disabled && strategy && <span className="text-green-200">({strategy})</span>}
     </button>
   );
+}
+
+/** 把 AI 返回的策略名称归一化到引擎支持的 strategyType；不支持返回 null */
+function normalizeStrategy(s: string | undefined): string | null {
+  const t = (s || '').trim().toLowerCase();
+  if (!t) return null;
+  const map: Record<string, string> = {
+    macd: 'macd', 'macd策略': 'macd',
+    kdj: 'kdj', 'kdj策略': 'kdj', '超买超卖': 'kdj', 'kdj超买超卖': 'kdj',
+    rsi: 'rsi', 'rsi强弱': 'rsi', 'rsi强弱策略': 'rsi',
+    ma: 'ma', '均线': 'ma', '均线系统': 'ma', '双均线': 'ma', '移动平均': 'ma', '均线多头': 'ma',
+    bollinger: 'bollinger', boll: 'bollinger', '布林': 'bollinger', '布林带': 'bollinger', '布林带突破': 'bollinger',
+    factor: 'factor', '因子': 'factor', '因子策略': 'factor', '综合评分': 'factor',
+  };
+  return map[t] ?? null;
 }
 
 /**
@@ -150,6 +168,7 @@ export default function AIStrategyAssistant({
 }: AIStrategyAssistantProps) {
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -244,9 +263,45 @@ export default function AIStrategyAssistant({
     window.location.href = `/quant?screener=true&stock=${code}`;
   };
 
-  const handleApplyStrategy = (strategy?: string) => {
-    console.log('Apply strategy:', strategy);
-    // In real implementation, this would trigger strategy application
+  const handleApplyStrategy = async (strategy?: string) => {
+    const type = normalizeStrategy(strategy);
+    if (!type) {
+      setError(`策略「${strategy}」无法直接应用：暂支持 MACD / KDJ / RSI / 均线(MA) / 布林带(BOLL) / 因子。`);
+      return;
+    }
+    if (applying) return;
+    setApplying(true);
+    setError(null);
+    try {
+      // 1) 取当前策略池（模拟交易引擎里的 tradingCodes）
+      const g = await fetch('/api/simulator').then(r => r.json());
+      const codes: string[] = g?.data?.tradingCodes || [];
+      if (codes.length === 0) {
+        setError('策略池还没有股票。请先到「④ 模拟交易」或「🔥 热点板块—全部推入交易池」加入股票，再应用策略。');
+        setApplying(false);
+        return;
+      }
+      // 2) 用该策略启动模拟交易引擎（start 会保留已有持仓/现金）
+      const r = await fetch('/api/simulator', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'start', codes, strategyType: type }),
+      });
+      const d = await r.json();
+      if (d.success) {
+        onMessagesChange(prev => [...prev, {
+          role: 'assistant',
+          content: `✅ 已应用「${type}」策略到 ${codes.length} 只策略池：${d.message || '模拟交易已启动（待开启自动驾驶）'}`,
+          timestamp: Date.now(),
+        }]);
+      } else {
+        setError(d.error || '应用策略失败');
+      }
+    } catch (e: any) {
+      setError(e?.message || '应用策略失败');
+    } finally {
+      setApplying(false);
+    }
   };
 
   return (
@@ -344,6 +399,7 @@ export default function AIStrategyAssistant({
                               key={actionIndex}
                               strategy={action.strategy}
                               onClick={() => handleApplyStrategy(action.strategy)}
+                              disabled={applying}
                             />
                           );
                         }
