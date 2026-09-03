@@ -437,6 +437,12 @@ const COMMON_PREFIXES: [string, string][] = [
 
 /**
  * 获取股票的行业分类
+ *
+ * ⚠️ 2026-09 修复 v2：移除 PREFIX_MAP 前缀猜测与 COMMON_PREFIXES 市场名兜底。
+ * 原因：前缀猜测（前3/4位只保留首个出现行业序）会把 002→汽车整车、000→房地产开发、
+ * 601→银行 灾难性错分类；COMMON_PREFIXES 返回「沪市主板/科创板」等市场名（非行业），
+ * 同样污染行业中性化与热点板块聚合。现在：CODE_MAP 精确命中权威返回，
+ * 未知一律「其他」（诚实兜底），由 industry-map-live.ts（datacenter 实时）补全真实行业。
  */
 export function getIndustry(code: string): string {
   // 去掉前后缀（支持 sh600519, sz000858, SH600519, .SZ, .SH, .BJ 等格式）
@@ -444,19 +450,6 @@ export function getIndustry(code: string): string {
 
   // 精确匹配
   if (CODE_MAP.has(num)) return CODE_MAP.get(num)!;
-
-  // 尝试前4位
-  const p4 = num.slice(0, 4);
-  if (PREFIX_MAP.has(p4)) return PREFIX_MAP.get(p4)!;
-
-  // 尝试前3位
-  const p3 = num.slice(0, 3);
-  if (PREFIX_MAP.has(p3)) return PREFIX_MAP.get(p3)!;
-
-  // 前缀兜底
-  for (const [prefix, fallback] of COMMON_PREFIXES) {
-    if (num.startsWith(prefix)) return fallback;
-  }
 
   return '其他';
 }

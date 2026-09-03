@@ -25,6 +25,7 @@ import type { FactorRawValues, BarLite } from './types';
 import { computeWQAlphas } from './alphas';
 import { fetchMainNetInflow, estimateMoneyFlowFromKBars, type RealMoneyFlow } from './real-moneyflow';
 import { getIndustry } from '../../industry-map';
+import { getLiveIndustry } from './industry-map-live';
 
 // ── 技术指标（单只）──────────────────────────────────
 function computeTechnical(kbars: KBar[]): {
@@ -292,8 +293,18 @@ export async function computeFactors(input: ComputeFactorsInput): Promise<Factor
   // 5. WorldQuant 10 alpha
   const wqAlphaScore = computeWQAlphas(kbars);
 
-  // 6. 行业（v3.0.1 2026-06-15：用 industry-map.ts 静态映射，比 inferIndustryFromCode 更准）
-  const industry = getIndustry(code);
+  // 6. 行业（2026-09 修复 v2：先用静态精确表，未知再用 datacenter 实时补全）
+  //    getIndustry() 已移除 PREFIX_MAP 前缀猜测与市场名兜底 —— 那会把 002→汽车整车、
+  //    000→房地产开发、601→银行 灾难性错分类（污染行业中性化 + 热点聚合）。
+  //    现在：静态 CODE_MAP 精确命中权威返回；未命中先得「其他」，再由
+  //    industry-map-live.ts 从 datacenter RPT_F10 拉真实行业（可达+权威+无分页错位）补全。
+  let industry = getIndustry(code); // 静态精确 or '其他'
+  if (!industry || industry === '其他') {
+    try {
+      const live = await getLiveIndustry(code);
+      if (live) industry = live;
+    } catch { /* 失败保持 '其他' */ }
+  }
 
   return {
     code, name,

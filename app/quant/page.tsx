@@ -3066,6 +3066,194 @@ function MarketOverview() {
   );
 }
 
+// ==================== ②+ 热点板块 & 板块轮动（2026-09 新增）====================
+// 两层逻辑：
+//   第 1 层（板块轮动）：v2 候选池内按申万一级行业聚合，算板块热度（涨幅+资金+上涨占比百分位）
+//   第 2 层（板块内选优质股）：热点板块内按 v2 综合分取 top 股，规避"追热垃圾股"
+// 数据源：与 ② 今日推荐完全同一份 v2 `一键分析` 响应里的 hotSectors → 数据一致
+interface HotSectorLeaderUI {
+  code: string;
+  name: string;
+  composite: number;
+  baseComposite: number;
+  changePercent: number;
+  sectorBoost: number;
+}
+interface HotSectorUI {
+  industry: string;
+  count: number;
+  upCount: number;
+  downCount: number;
+  avgChangePercent: number;
+  heatScore: number;
+  rank: number;
+  isLeading: boolean;
+  leaders: HotSectorLeaderUI[];
+}
+function HotSectorSection() {
+  const [sectors, setSectors] = useState<HotSectorUI[]>([]);
+  const [storageTs, setStorageTs] = useState<number | null>(null);
+  const [pushing, setPushing] = useState(false);
+
+  const loadFromStorage = useCallback(() => {
+    try {
+      const raw = localStorage.getItem('quant_hot_sectors');
+      if (!raw) { setSectors([]); setStorageTs(null); return; }
+      const d = JSON.parse(raw);
+      setSectors(Array.isArray(d.sectors) ? d.sectors : []);
+      setStorageTs(d.ts ?? null);
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    loadFromStorage();
+    window.addEventListener('quant:hot-sectors-updated', loadFromStorage);
+    window.addEventListener('storage', loadFromStorage);
+    return () => {
+      window.removeEventListener('quant:hot-sectors-updated', loadFromStorage);
+      window.removeEventListener('storage', loadFromStorage);
+    };
+  }, [loadFromStorage]);
+
+  // 推入交易池（与 ② 今日推荐 完全相同的 addCodes + 事件广播机制）
+  const pushToPool = async (codes: string[]) => {
+    if (codes.length === 0 || pushing) return;
+    setPushing(true);
+    try {
+      const res = await fetch('/api/simulator', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'addCodes', codes, strategyType: 'factor' }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        window.dispatchEvent(new CustomEvent('quant:simulator-changed', { detail: { codes, source: 'hot-section' } }));
+        toast.success(`🔥 ${codes.length} 只热点优质股已推入交易池`, {
+          description: '可到「④ 模拟交易」开启自动驾驶',
+          duration: 4000,
+        });
+        setTimeout(() => {
+          document.getElementById('section-simulator')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 1200);
+      } else {
+        toast.error(json.error || '推入失败');
+      }
+    } catch (e: any) {
+      toast.error(e?.message || '网络错误');
+    } finally {
+      setPushing(false);
+    }
+  };
+
+  if (sectors.length === 0) {
+    // 空态也常驻显示（2026-09：功能可见性 —— 用户提过\"看不到热点功能\"）。
+    // 未跑分析时给占位引导，跑「⚡ 一键分析」后由 hotSectors 点亮。
+    return (
+      <section className="mb-6" data-section-target="hot-sectors">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h2 className="text-lg font-bold text-slate-100">🔥 热点板块 & 板块轮动</h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              A股是资金市 · 先选当前资金集中的热点板块，再在板块内挑优质股（规避追高接盘）
+            </p>
+          </div>
+          <span className="text-[11px] px-2 py-1 rounded bg-slate-800 text-slate-400 border border-slate-700">
+            等待分析
+          </span>
+        </div>
+        <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/40 p-6 text-center">
+          <p className="text-sm text-slate-400">📊 热点板块随「⚡ 一键分析」自动生成</p>
+          <p className="text-xs text-slate-500 mt-1">
+            在「② 今日推荐」点 ⚡ 一键分析，即可点亮热点板块（板块热度 + 板块内优质股一键推入交易池）
+          </p>
+        </div>
+      </section>
+    );
+  }
+
+  const heatColor = (h: number) =>
+    h >= 70 ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+      : h >= 50 ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+      : 'bg-slate-500/20 text-slate-300 border-slate-600/40';
+  const pct = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
+  const allLeaderCodes = sectors.flatMap(s => s.leaders.map(l => l.code));
+
+  return (
+    <section className="mb-6" data-section-target="hot-sectors">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h2 className="text-lg font-bold text-slate-100">🔥 热点板块 & 板块轮动</h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            A股是资金市 · 先选当前资金集中的热点板块，再在板块内挑优质股（规避追高接盘）
+            {storageTs ? ` · ${new Date(storageTs).toLocaleTimeString()} 更新` : ''}
+          </p>
+        </div>
+        <button
+          onClick={() => pushToPool(allLeaderCodes)}
+          disabled={pushing || allLeaderCodes.length === 0}
+          className="text-xs px-3 py-1.5 rounded-lg font-semibold bg-rose-600 hover:bg-rose-500 disabled:opacity-40 transition-colors"
+        >
+          {pushing ? '推入中…' : `🔥 全部 ${allLeaderCodes.length} 只推入交易池`}
+        </button>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        {sectors.map(s => (
+          <div
+            key={s.industry}
+            className={`rounded-xl border p-3 ${s.isLeading ? 'bg-gradient-to-br from-rose-900/40 to-slate-900 border-rose-500/40' : 'bg-slate-900 border-slate-800'}`}
+          >
+            {/* 板块头 */}
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-bold text-slate-100">🎯 {s.industry}</span>
+                {s.isLeading && <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-600/30 text-rose-300 border border-rose-500/40 font-semibold">本轮榜首</span>}
+              </div>
+              <span className={`text-xs font-bold px-2 py-0.5 rounded border ${heatColor(s.heatScore)}`}>
+                热度 {s.heatScore}
+              </span>
+            </div>
+            {/* 板块统计 */}
+            <div className="flex items-center gap-3 text-[11px] text-slate-400 mb-2">
+              <span className={s.avgChangePercent >= 0 ? 'text-rose-300' : 'text-emerald-300'}>
+                涨幅 {pct(s.avgChangePercent)}
+              </span>
+              <span>上涨 {s.upCount}/{s.count}</span>
+              <span className="text-slate-500">{s.count} 只成分</span>
+            </div>
+            {/* 板块内优质股（第 2 层） */}
+            <div className="space-y-1.5">
+              {s.leaders.map((l, i) => (
+                <div key={l.code} className="flex items-center justify-between text-xs bg-slate-800/60 rounded-lg px-2 py-1.5">
+                  <div className="min-w-0 flex items-center gap-2">
+                    <span className="text-[10px] text-slate-500 w-4 shrink-0">#{i + 1}</span>
+                    <span className="font-medium text-slate-200 truncate">{l.name}</span>
+                    <span className="text-[10px] text-slate-500">{l.code}</span>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-[10px] text-amber-300">分 {l.composite?.toFixed(1)}</span>
+                    {l.sectorBoost > 0 && (
+                      <span className="text-[10px] px-1 rounded bg-rose-600/20 text-rose-300" title="板块热度加持分">+{l.sectorBoost.toFixed(1)}</span>
+                    )}
+                    <span className={l.changePercent >= 0 ? 'text-rose-300' : 'text-emerald-300'}>
+                      {pct(l.changePercent)}
+                    </span>
+                    <button
+                      onClick={() => pushToPool([l.code])}
+                      className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 hover:bg-rose-600 transition-colors"
+                    >
+                      推池
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 // ==================== ③ 今日推荐 ====================
 // ==================== ③ 今日推荐 ====================
 // 推荐业绩归因卡（mini 净值曲线 + 胜率 + 累计收益 + 最大回撤）
@@ -3651,6 +3839,19 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
       setLastDiagnostics(json.diagnostics || null);
       setLastConcentration(json.concentration || null);
 
+      // 2026-09：保存热点板块到 localStorage（顶部 <HotSectorSection> 直接消费）
+      // 与 ② 今日推荐同一份 v2 响应 → 热点区与推荐区数据完全一致
+      if (json.hotSectors) {
+        try {
+          localStorage.setItem('quant_hot_sectors', JSON.stringify({
+            sectors: json.hotSectors,
+            ts: Date.now(),
+            period: period === '5d' ? '5d' : '20d',
+          }));
+          window.dispatchEvent(new CustomEvent('quant:hot-sectors-updated'));
+        } catch { /* ignore */ }
+      }
+
       // v3.0（2026-06-15）：保存每日 raw 因子快照到 IDB（fire-and-forget）
       //   - 用 v2 results 里的 raw 因子 → 写 factorSnapshots 表
       //   - 5/20 个交易日后由 fillFutureReturns() 补 return5d/return20d
@@ -3730,6 +3931,17 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
         if (retryJson.success) {
           json.results = retryJson.results;
           json.diagnostics = retryJson.diagnostics;
+          // 2026-09：降级重试也可能返回新的热点板块 → 覆盖保存
+          if (retryJson.hotSectors) {
+            try {
+              localStorage.setItem('quant_hot_sectors', JSON.stringify({
+                sectors: retryJson.hotSectors,
+                ts: Date.now(),
+                period: period === '5d' ? '5d' : '20d',
+              }));
+              window.dispatchEvent(new CustomEvent('quant:hot-sectors-updated'));
+            } catch { /* ignore */ }
+          }
           const rd = retryJson.diagnostics || {};
           compositeScores = (retryJson.results || []).map((r: any) => ({
             code: r.code, name: r.name, price: r.price, changePercent: r.changePercent,
@@ -4895,6 +5107,117 @@ function WatchlistMonitor({ onGoPro, onShowDetail }: { onGoPro: (tab: string) =>
     }
   };
 
+  // ============ 批量等额买入（勾选多只盯盘股 + 输入总额，等额分配）============
+  // selected: 勾选的股票代码集合
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // batchAmount: 买入总金额（默认 1 万）
+  const [batchAmount, setBatchAmount] = useState<number>(10000);
+  // batchBuying: 逐只下单进行中（锁住所有交互防重复提交）
+  const [batchBuying, setBatchBuying] = useState(false);
+  // batchProgress: 下单进度 { done, total }，按钮上显示 "买入中 2/5"
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
+
+  const toggleSelect = (code: string) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code); else next.add(code);
+      return next;
+    });
+  };
+  const toggleSelectAll = () => {
+    setSelected(prev => (prev.size === items.length ? new Set() : new Set(items.map(i => i.code))));
+  };
+
+  const selectedItems = items.filter(i => selected.has(i.code));
+
+  // 等额分配计算：总额 / 勾选数 = 每只预算；按市价向下取整到 100 股整数倍（A 股 1 手）
+  const buildBatchPlan = (total: number) => {
+    const n = selectedItems.length;
+    if (n === 0 || !total || total <= 0) return { rows: [], skipped: [], budgetPer: 0, totalCost: 0 };
+    const budgetPer = total / n;
+    const rows: { item: WatchlistQuote; volume: number; cost: number }[] = [];
+    const skipped: { item: WatchlistQuote; reason: string }[] = [];
+    let totalCost = 0;
+    for (const item of selectedItems) {
+      if (item.price <= 0) { skipped.push({ item, reason: '无行情' }); continue; }
+      const lots = Math.floor(budgetPer / (item.price * 100));
+      if (lots < 1) { skipped.push({ item, reason: '预算不足 1 手' }); continue; }
+      const volume = lots * 100;
+      const cost = volume * item.price;
+      rows.push({ item, volume, cost });
+      totalCost += cost;
+    }
+    return { rows, skipped, budgetPer, totalCost };
+  };
+
+  const batchPlan = batchAmount > 0 ? buildBatchPlan(batchAmount) : { rows: [], skipped: [], budgetPer: 0, totalCost: 0 };
+
+  // 批量等额买入：confirm 展示每只明细 → 逐只市价下单（串行）→ 汇总 toast + 广播刷新 ④ 区
+  const handleBatchBuy = async () => {
+    if (batchBuying) return;
+    if (selectedItems.length === 0) { toast.error('请先勾选要买入的盯盘股票'); return; }
+    if (!batchAmount || batchAmount <= 0) { toast.error('请输入买入总金额'); return; }
+    if (batchPlan.rows.length === 0) {
+      toast.error(`所选股票均无法买入：总额 ¥${batchAmount.toLocaleString()} 不足以各买 1 手（或暂无行情）`);
+      return;
+    }
+    // 具体数字确认（沿用项目模式）
+    const lines = batchPlan.rows.map(r =>
+      `  ${r.item.name} ${r.item.code}  ¥${r.item.price.toFixed(2)} → ${r.volume / 100}手(${r.volume}股) ¥${r.cost.toFixed(0)}`
+    );
+    if (batchPlan.skipped.length > 0) {
+      lines.push('');
+      lines.push(`跳过 ${batchPlan.skipped.length} 只：`);
+      for (const s of batchPlan.skipped) lines.push(`  ${s.item.name}（${s.reason}）`);
+    }
+    lines.push('');
+    lines.push(`每只预算 ¥${batchPlan.budgetPer.toFixed(0)} · 预计总花费 ¥${batchPlan.totalCost.toFixed(0)}` +
+      (batchAmount - batchPlan.totalCost >= 1 ? ` · 剩余 ¥${(batchAmount - batchPlan.totalCost).toFixed(0)}` : ''));
+    lines.push('将按市价逐只买入，确认执行？');
+    if (!window.confirm(`💰 等额买入确认（${batchPlan.rows.length} 只 · 总金额 ¥${batchAmount.toLocaleString()})\n\n${lines.join('\n')}`)) return;
+
+    setBatchBuying(true);
+    setBatchProgress({ done: 0, total: batchPlan.rows.length });
+    let okCount = 0, failCount = 0;
+    const failReasons: string[] = [];
+    for (let i = 0; i < batchPlan.rows.length; i++) {
+      const row = batchPlan.rows[i];
+      try {
+        const res = await fetch('/api/simulator', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'order', code: row.item.code, direction: 'long', volume: row.volume, type: 'market' }),
+        });
+        const json = await res.json();
+        if (json.success && json.data?.order?.status === 'filled') {
+          okCount++;
+        } else {
+          failCount++;
+          failReasons.push(`${row.item.name}（${json.data?.order?.reason || json.error || '未知错误'}）`);
+        }
+      } catch (e: any) {
+        failCount++;
+        failReasons.push(`${row.item.name}（网络错误）`);
+      }
+      setBatchProgress({ done: i + 1, total: batchPlan.rows.length });
+    }
+    setBatchBuying(false);
+    setBatchProgress(null);
+    setSelected(new Set());
+    if (okCount > 0) {
+      toast.success(
+        `✅ 等额买入完成：${okCount} 只成交 · ${failCount} 只失败` +
+        (batchPlan.skipped.length > 0 ? ` · ${batchPlan.skipped.length} 只跳过` : '') +
+        ` · 花费约 ¥${batchPlan.totalCost.toFixed(0)}`,
+        { duration: 3500 }
+      );
+      // 广播让 ④ 模拟交易区（账户/持仓/订单流）立即刷新
+      window.dispatchEvent(new CustomEvent('quant:simulator-changed', { detail: { source: 'watchlist-batch-buy' } }));
+      setTimeout(() => document.getElementById('section-simulator')?.scrollIntoView({ behavior: 'smooth' }), 800);
+    }
+    if (failReasons.length > 0) toast.error('失败明细: ' + failReasons.join('；'), { duration: 5000 });
+  };
+
   if (!loading && items.length === 0) {
     return (
       <section className="mb-6" data-section-target="watchlist">
@@ -4916,6 +5239,18 @@ function WatchlistMonitor({ onGoPro, onShowDetail }: { onGoPro: (tab: string) =>
           <p className="text-xs text-slate-500 mt-0.5">{items.length} 只自选股 · 每 10s 自动刷新</p>
         </div>
         <div className="flex items-center gap-2 w-fit">
+          <button
+            onClick={toggleSelectAll}
+            disabled={items.length === 0 || batchBuying}
+            className={`text-xs px-3 py-1 rounded border transition-colors whitespace-nowrap disabled:opacity-40 ${
+              selected.size > 0 && selected.size === items.length
+                ? 'border-cyan-500 bg-cyan-600/20 text-cyan-300 hover:bg-cyan-600/30'
+                : 'border-slate-700 hover:border-cyan-500 hover:text-cyan-300 text-slate-400'
+            }`}
+            title={selected.size === items.length ? '取消全选' : '全选所有自选股（用于批量等额买入）'}
+          >
+            {selected.size === items.length ? '☑ 取消全选' : '☑ 全选'}
+          </button>
           <button onClick={handleClearAll} disabled={items.length === 0} className="text-xs px-3 py-1 rounded border border-slate-700 hover:border-rose-500 hover:text-rose-400 text-slate-400 disabled:opacity-40 disabled:hover:border-slate-700 disabled:hover:text-slate-400 transition-colors whitespace-nowrap" title="清空全部自选股">
             🗑️ 清空
           </button>
@@ -4924,20 +5259,108 @@ function WatchlistMonitor({ onGoPro, onShowDetail }: { onGoPro: (tab: string) =>
           </button>
         </div>
       </div>
+      {/* 批量等额买入工具条：勾选 ≥1 只后浮现 */}
+      {selected.size > 0 && (
+        <div className="mb-3 rounded-xl border border-cyan-700/50 bg-cyan-950/25 p-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span className="text-xs font-medium text-cyan-200">☑ 已选 {selected.size} 只</span>
+            <label className="flex items-center gap-1.5 text-xs text-slate-300">
+              <span className="text-slate-500">总额</span>
+              <span className="flex items-center bg-slate-900 border border-slate-700 rounded overflow-hidden focus-within:border-cyan-500 transition-colors">
+                <span className="pl-2 text-slate-500 text-xs">¥</span>
+                <input
+                  type="number"
+                  min={100}
+                  step={100}
+                  value={batchAmount || ''}
+                  placeholder="10000"
+                  onChange={e => setBatchAmount(parseInt(e.target.value || '0', 10))}
+                  disabled={batchBuying}
+                  className="w-28 text-xs px-1.5 py-1.5 bg-transparent text-white focus:outline-none disabled:opacity-50 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
+                  title="买入总金额，等额分配到每只勾选股票"
+                />
+              </span>
+            </label>
+            <div className="flex items-center gap-1">
+              {[5000, 10000, 30000, 50000].map(v => (
+                <button
+                  key={v}
+                  onClick={() => setBatchAmount(v)}
+                  disabled={batchBuying}
+                  className={`text-[10px] px-1.5 py-0.5 rounded transition-colors disabled:opacity-50 ${
+                    batchAmount === v ? 'bg-cyan-600/40 text-cyan-200' : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                >{(v / 10000).toFixed(v >= 10000 ? 0 : 1)}万</button>
+              ))}
+            </div>
+            <span className="text-[11px] text-slate-400">
+              每只预算 <span className="text-cyan-300 font-medium">¥{batchPlan.budgetPer > 0 ? batchPlan.budgetPer.toFixed(0) : '—'}</span>
+              {batchPlan.rows.length > 0 && (<> · 可买 <span className="text-slate-200">{batchPlan.rows.length}</span> 只 · 约 <span className="text-cyan-300 font-medium">¥{batchPlan.totalCost.toFixed(0)}</span></>)}
+              {batchPlan.skipped.length > 0 && <span className="text-slate-500"> · 跳过 {batchPlan.skipped.length} 只</span>}
+            </span>
+            <div className="flex-1" />
+            <button
+              onClick={handleBatchBuy}
+              disabled={batchBuying || batchPlan.rows.length === 0}
+              className="text-xs px-4 py-1.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded font-medium flex items-center gap-1"
+              title={batchPlan.rows.length === 0 ? '所选股票均不足 1 手，无法等额买入' : `按市价等额买入 ${batchPlan.rows.length} 只（每只预算 ¥${batchPlan.budgetPer.toFixed(0)}）`}
+            >
+              {batchBuying && batchProgress
+                ? <><span className="animate-pulse">⏳</span> 买入中 {batchProgress.done}/{batchProgress.total}</>
+                : <>🟢 等额买入 {batchPlan.rows.length > 0 ? `${batchPlan.rows.length}只` : ''}</>}
+            </button>
+            <button
+              onClick={() => setSelected(new Set())}
+              disabled={batchBuying}
+              className="text-xs px-2.5 py-1.5 rounded border border-slate-700 hover:border-slate-500 text-slate-400 hover:text-slate-200 disabled:opacity-40 transition-colors"
+              title="取消所有勾选"
+            >✕ 取消</button>
+          </div>
+          {/* 预估明细：每只股数/金额实时预览 */}
+          {batchPlan.rows.length > 0 && (
+            <div className="mt-2 pt-2 border-t border-cyan-900/40 text-[11px] text-slate-400 flex flex-wrap gap-x-4 gap-y-1">
+              {batchPlan.rows.map(r => (
+                <span key={r.item.code}>
+                  <span className="text-slate-200">{r.item.name}</span>{' '}
+                  <span className="text-slate-500">¥{r.item.price.toFixed(2)}×{r.volume / 100}手</span>{' '}
+                  <span className="text-cyan-300">¥{r.cost.toFixed(0)}</span>
+                </span>
+              ))}
+              {batchPlan.skipped.map(s => (
+                <span key={s.item.code} className="text-slate-600 line-through" title={s.reason}>
+                  {s.item.name}({s.reason})
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       {loading ? (
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-500 text-sm">加载中…</div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {items.map(item => (
-            <div key={item.code} className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+          {items.map(item => {
+            const isSelected = selected.has(item.code);
+            return (
+            <div key={item.code} className={`bg-slate-900 border rounded-xl p-4 transition-colors ${isSelected ? 'border-cyan-500/70 bg-cyan-950/30' : 'border-slate-800'}`}>
               <div className="flex items-start justify-between mb-2">
-                <div
-                  className="cursor-pointer hover:opacity-80 transition-opacity"
-                  onClick={() => onShowDetail({ code: item.code, name: item.name })}
-                  title={`点击查看 ${item.name} K线详情`}
-                >
-                  <div className="text-white font-bold">{item.name}</div>
-                  <div className="text-xs text-slate-500">{item.code}</div>
+                <div className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleSelect(item.code)}
+                    disabled={batchBuying}
+                    className="mt-1 w-4 h-4 rounded border-slate-600 bg-slate-800 text-cyan-500 accent-cyan-500 disabled:opacity-40"
+                    title={`勾选 ${item.name} 参与批量等额买入`}
+                  />
+                  <div
+                    className="cursor-pointer hover:opacity-80 transition-opacity"
+                    onClick={() => onShowDetail({ code: item.code, name: item.name })}
+                    title={`点击查看 ${item.name} K线详情`}
+                  >
+                    <div className="text-white font-bold">{item.name}</div>
+                    <div className="text-xs text-slate-500">{item.code}</div>
+                  </div>
                 </div>
                 <div className="flex items-start gap-1.5">
                   <div className={`text-xs px-2 py-0.5 rounded-full ${
@@ -4974,7 +5397,7 @@ function WatchlistMonitor({ onGoPro, onShowDetail }: { onGoPro: (tab: string) =>
                 <div className="flex items-center gap-1">
                   <button
                     onClick={(e) => { e.stopPropagation(); setVolumeFor(item.code, getVolumeFor(item.code) - 100); }}
-                    disabled={adding === item.code}
+                    disabled={adding === item.code || batchBuying}
                     className="text-xs px-2 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 rounded transition-colors"
                     title="减少 100 股"
                   >−100</button>
@@ -4986,19 +5409,19 @@ function WatchlistMonitor({ onGoPro, onShowDetail }: { onGoPro: (tab: string) =>
                     onChange={(e) => setVolumeFor(item.code, parseInt(e.target.value) || 0)}
                     onClick={(e) => e.stopPropagation()}
                     onFocus={(e) => e.target.select()}
-                    disabled={adding === item.code}
+                    disabled={adding === item.code || batchBuying}
                     className="flex-1 min-w-0 text-xs px-1.5 py-1 bg-slate-800 border border-slate-700 focus:border-cyan-500 focus:outline-none text-white text-center rounded disabled:opacity-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     title="A 股必须是 100 的整数倍"
                   />
                   <button
                     onClick={(e) => { e.stopPropagation(); setVolumeFor(item.code, getVolumeFor(item.code) + 100); }}
-                    disabled={adding === item.code}
+                    disabled={adding === item.code || batchBuying}
                     className="text-xs px-2 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 rounded transition-colors"
                     title="增加 100 股"
                   >+100</button>
                   <button
                     onClick={(e) => { e.stopPropagation(); setVolumeFor(item.code, getVolumeFor(item.code) + 400); }}
-                    disabled={adding === item.code}
+                    disabled={adding === item.code || batchBuying}
                     className="text-xs px-2 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 rounded transition-colors"
                     title="增加 500 股"
                   >+500</button>
@@ -5006,14 +5429,14 @@ function WatchlistMonitor({ onGoPro, onShowDetail }: { onGoPro: (tab: string) =>
                 <div className="flex gap-2">
                   <button
                     onClick={() => handleQuickOrder(item.code, 'long', getVolumeFor(item.code))}
-                    disabled={adding === item.code}
+                    disabled={adding === item.code || batchBuying}
                     className="flex-1 text-xs py-1.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white rounded transition-colors"
                   >
                     {adding === item.code ? '…' : `买入 ${getVolumeFor(item.code)}股`}
                   </button>
                   <button
                     onClick={() => handleQuickOrder(item.code, 'short', getVolumeFor(item.code))}
-                    disabled={adding === item.code}
+                    disabled={adding === item.code || batchBuying}
                     className="flex-1 text-xs py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded transition-colors"
                   >
                     卖出 {getVolumeFor(item.code)}股
@@ -5021,7 +5444,8 @@ function WatchlistMonitor({ onGoPro, onShowDetail }: { onGoPro: (tab: string) =>
                 </div>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </section>
@@ -8248,6 +8672,7 @@ export default function QuantLitePage() {
             <PriceAnomalyDetector />
             <main className="max-w-7xl mx-auto px-4 py-6">
               <MarketOverview />
+              <HotSectorSection />
               <RiskEventStream />
               <TodayRecommendations
                 onAddToSimulator={() => {}}

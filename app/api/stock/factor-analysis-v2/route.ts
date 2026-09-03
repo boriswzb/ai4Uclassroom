@@ -32,6 +32,8 @@ import {
   runRecommendationWalkForward,
   computeConcentration,
   optimizePortfolio,
+  computeHotSectors,
+  applySectorBoost,
   type V2ScoreOptions,
 } from '@/lib/quant/factor/v2';
 
@@ -515,10 +517,13 @@ export async function GET(request: NextRequest) {
     }
     const codes = Array.from(codeMap.keys());
 
-    // 3. 批量拉 K 线（用 limit 控制规模，避免 dev server OOM）
-    // 修复：原 500 只 × 200 根 = 100,000 根 KBar 在 V8 默认 4GB 堆下会 OOM
-    // 限制为 limit*3 只（前端 limit=80 → 240 只），count 降为 100
-    const targetCodes = codes.slice(0, Math.min(limit * 3, 300));
+    // 3. 批量拉 K 线（池规模与展示数量解耦：保证截面统计显著，同时防 OOM）
+    // 修复（2026-09）：原 limit*3 会让池随前端展示数缩水 —— 前端要 80 条结果，
+    //    池只有 240 只，截面样本小，百分位/IC/行业中性化统计意义不足。
+    //    设统计下限 V2_POOL_MIN（500 只 = 业界最低统计显著），上限防 OOM。
+    const V2_POOL_MIN = 500;
+    const V2_POOL_MAX = 600;   // OOM 硬上限（500 只 × 100 根 = 50k KBar，4GB 堆安全）
+    const targetCodes = codes.slice(0, Math.min(Math.max(limit * 3, V2_POOL_MIN), V2_POOL_MAX));
     const klines = await getKlinesBatch(targetCodes, 100);
 
     // 4. 拉真实主力净流入（批量）
@@ -530,8 +535,8 @@ export async function GET(request: NextRequest) {
       flowCache = { data: flowData, ts: Date.now() };
     }
 
-    // 5. 计算 11 类因子（并发）
-    const CONCURRENCY = 8;
+    // 5. 计算 11 类因子（并发；2026-09 池扩到 500，并发 8→12 控耗时）
+    const CONCURRENCY = 12;
     const candidates: FactorRawValues[] = [];
     // 诊断：分阶段统计，帮助定位"K线拉取全失败 vs 股票列表空 vs K线<30根"
     let klineSuccessCount = 0;  // 成功拉到 ≥1 根 K 线的股票数
@@ -672,7 +677,18 @@ export async function GET(request: NextRequest) {
         icStats,  // 注入 IC 统计供 weightMode='ic' 使用
       },
     });
-    const topResults = v2Out.results.slice(0, limit);
+
+    // 7.1 热点板块 + 板块加持（2026-09 新增）
+    //   第 1 层：在 v2 候选池内按申万一级行业聚合,算板块热度（涨幅+资金+上涨占比百分位）
+    //   第 2 层：给属于热点板块的股票加板块热度分（克制权重 15%），让热点板块优质股自然靠前
+    //   响应返回 hotSectors（含板块内 top 股,可一键推交易池），实现"热点模块多推荐一点"
+    const hotRaw = computeHotSectors(v2Out.results);
+    const boostedResults = applySectorBoost(v2Out.results, hotRaw);
+    const hotSectors = computeHotSectors(boostedResults);
+    // 用 boost 后综合分重新排序取 topN（热点板块股因此在推荐区挤进前排）
+    const topResults = [...boostedResults]
+      .sort((a, b) => (b.composite ?? 0) - (a.composite ?? 0))
+      .slice(0, limit);
 
     // 7.6 行业集中度评估（v2.1.1 新增 — 2026-06-15）
     //   目的：Top N 推荐作为组合的分散度（HHI + 行业偏离）
@@ -685,6 +701,7 @@ export async function GET(request: NextRequest) {
       action,
       count: candidates.length,
       results: topResults,
+      hotSectors,  // 2026-09：热点板块（板块热度 + 板块内 top 股），前端热点区直接消费
       diagnostics: { ...v2Out.diagnostics, icStats },
       concentration,  // v2.1.1：行业集中度评估
       timestamp: Date.now(),

@@ -16,6 +16,7 @@ export * from './percentile';
 export * from './neutralize';
 export * from './real-moneyflow';
 export * from './weights';
+export * from './hot-sector';
 export {
   scoreV2,
   computeV1Pillars,

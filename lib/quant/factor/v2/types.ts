@@ -161,6 +161,12 @@ export interface V2ScoreResult {
     isNewShare: boolean;     // 上市 < 60 日
     isLowLiquidity: boolean; // 20 日均成交额 < 1 亿
   };
+
+  // 板块热点加持（hot-sector.ts 注入）— 2026-09 新增
+  sectorBoost?: number;      // 板块热度加持分（当前值）
+  baseComposite?: number;    // 加持前综合分
+  sectorHeat?: number;       // 所属板块热度 0-100（若属热点板块）
+  sectorIndustry?: string;   // 所属申万行业名
 }
 
 // ── 中性化配置 ─────────────────────────────────────
