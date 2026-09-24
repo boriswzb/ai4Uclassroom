@@ -97,6 +97,20 @@ export class DailyLossLimitRule implements RiskRule {
     }
     return false;
   }
+
+  /**
+   * 计算相对当日起始权益的亏损比例，返回 {triggered, ratio}。不设 triggered 副作用。
+   * 用于 checkRule 的买入拦截：基于 dailyStartEquity 而非 account.totalPnL（累计盈亏
+   * 与「当日亏损」语义不符，会因历史累计亏损/当前持仓浮亏锁死所有新买入）。
+   */
+  checkRatio(equity: number): { triggered: boolean; ratio: number } {
+    if (this.dailyStartEquity === 0) {
+      this.dailyStartEquity = equity;
+      return { triggered: false, ratio: 0 };
+    }
+    const loss = (this.dailyStartEquity - equity) / this.dailyStartEquity;
+    return { triggered: loss > this.threshold, ratio: Math.max(0, loss) };
+  }
 }
 
 // ==================== 风控引擎 ====================
@@ -112,6 +126,7 @@ export class RiskEngine {
       frozen: 0,
       totalAssets: initialCash,
       totalPnL: 0,
+      initialCash,
       positions: []
     };
 
@@ -257,6 +272,8 @@ export class RiskEngine {
   ): { allowed: boolean; reason?: string } {
     switch (rule.type) {
       case 'position_limit': {
+        // ⭐ 合并自 quant-v3 38e3d9a：仓位限制只在买入时检查，卖出不限制（清仓时原持仓+卖出量会超限）
+        if (order.direction !== 'long') break;
         const currentPosition = this.account.positions.find(p => p.code === order.code);
         // threshold 单位为"手"（1手=100股），比较时需换算
         const maxShares = rule.threshold * 100;
@@ -268,6 +285,8 @@ export class RiskEngine {
       }
 
       case 'single_order_limit': {
+        // ⭐ 合并自 quant-v3 38e3d9a：单笔限制只在买入时检查，卖出不限制（清仓时单笔可能很大）
+        if (order.direction !== 'long') break;
         const orderValue = order.price * order.volume;
         if (orderValue > rule.threshold) {
           return { allowed: false, reason: `超过单笔订单限制: ${orderValue} > ${rule.threshold}` };
@@ -276,18 +295,22 @@ export class RiskEngine {
       }
 
       // ── P4: 日亏损预检查 ──
-      //   原版 daily_loss_limit 只在 checkPosition 里被 trigger 后被动平仓
-      //   现在在 checkOrder 里也检查：策略主动下单时如果日内已亏超阈值，主动拦截
-      //   避免日内亏损突破阈值（强止损 + 策略止损叠加击穿限制）
+      //   2026-09-06 修正语义：日亏损限制应【只拦截买入/加仓】（亏太多禁止增加风险敞口），
+      //   【绝不拦截卖出/减仓/止损】——否则用户想止损时被锁死，无法止损反而放大亏损。
+      //   业界正确：卖出=降低风险的动作，任何时候都不该被风控阻挡。
+      //   ⚠️ 2026-09-24 二次修正：日亏损基准必须用当日起始权益 dailyStartEquity，
+      //     绝不能用 account.totalPnL / totalAssets（累计/总盈亏）——它包含历史已实现亏损与
+      //     当前持仓浮亏，会把「根本不是今日」的亏损当成「当日亏损」，导致账户一旦整体
+      //     浮亏/累计亏损 > 阈值就永久锁死所有新买入（含批量等额买入毫无亏损的新股票）。
       case 'daily_loss_limit': {
-        // 仅对卖出（short）触发：买入不影响（建仓不算亏）
-        if (order.direction === 'short' && this.account) {
-          const dailyPnL = this.account.totalPnL; // 简化：用累计盈亏代理日内盈亏
-          const dailyLossRatio = this.account.totalAssets > 0
-            ? Math.abs(Math.min(0, dailyPnL)) / this.account.totalAssets
-            : 0;
-          if (dailyLossRatio > rule.threshold) {
-            return { allowed: false, reason: `日内亏损已达 ${(dailyLossRatio * 100).toFixed(2)}%，超过限制 ${(rule.threshold * 100).toFixed(0)}%，禁止继续卖出` };
+        // 只对买入（long）触发：禁止在日内已亏损超阈值时继续加仓/建仓
+        if (order.direction === 'long' && this.account) {
+          const dailyRule = this.rules.get('daily_loss_limit') as DailyLossLimitRule | undefined;
+          if (dailyRule) {
+            const r = dailyRule.checkRatio(this.account.totalAssets);
+            if (r.triggered) {
+              return { allowed: false, reason: `日内亏损已达 ${(r.ratio * 100).toFixed(2)}%，超过限制 ${(dailyRule.threshold * 100).toFixed(0)}%，禁止继续买入/加仓（卖出减仓不受限）` };
+            }
           }
         }
         break;
@@ -386,6 +409,11 @@ export class PositionManager {
       this.buyDates.delete(code); // Bug2 fix: 清仓时同步清除买入日期
     } else {
       position.marketValue = position.volume * price;
+      // ⭐ 资金计算修复（合并自 quant-v3 38e3d9a）：部分平仓后同步更新
+      //   currentPrice + 重算剩余持仓的 unrealizedPnL，否则浮盈按减仓前的
+      //   volume 计算 → 剩余持仓盈亏虚高
+      position.currentPrice = price;
+      position.unrealizedPnL = (price - position.avgCost) * position.volume;
     }
 
     return pnl;

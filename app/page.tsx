@@ -20,6 +20,8 @@ import {
   ChevronUp,
   Upload,
   UserCheck,
+  Cpu,
+  Calculator,
 } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { LanguageSwitcher } from '@/components/language-switcher';
@@ -378,6 +380,8 @@ function HomePage() {
             ref={toolbarRef}
             className="flex items-center gap-1"
           >
+
+
             {/* Language Selector */}
             <LanguageSwitcher onOpen={() => setThemeOpen(false)} />
 
@@ -444,6 +448,26 @@ function HomePage() {
 
             {/* Invite Login Button */}
             <InviteLoginButton />
+
+            <div className="w-[1px] h-4 bg-border/60" />
+
+            {/* AI Training Calculator */}
+            <a
+              href="/ai-training/"
+              className="p-2 rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground transition-colors group relative"
+              title="AI训练算力计算器"
+            >
+              <Calculator className="w-4 h-4" />
+            </a>
+
+            {/* AI Computing Operation */}
+            <a
+              href="/ai-computing-operation/"
+              className="p-2 rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground transition-colors group relative"
+              title="AI算力运营系统"
+            >
+              <Cpu className="w-4 h-4" />
+            </a>
 
             <div className="w-[1px] h-4 bg-border/60" />
 

@@ -107,6 +107,7 @@ export class EnhancedBacktestEngine {
       frozen: 0,
       totalAssets: this.config.initialCash,
       totalPnL: 0,
+      initialCash: this.config.initialCash,
       positions: [],
     };
   }

@@ -173,6 +173,12 @@ interface ScreenerRow {
   technicalScore?: number;
   // 8 大类 / 3 大支柱 JSON 字符串（来自 IDB.factorScores），用于综合分详情弹窗
   factorScores?: string;
+  // 2026-09-06：热点板块分级配额标签（今日推荐 Top10 来自最多 4 个热点板块，热度越高占席越多）
+  industry?: string;            // 申万一级行业
+  quotaRank?: number;           // 配额位次（1..N，越小越靠前）
+  quotaSectorRank?: number;     // 板块热度名次（1 起，越小越热）
+  quotaHeat?: number;           // 板块热度 0-100
+  quotaSlots?: number;          // 该板块本次分到的推荐名额
 }
 
 interface WatchlistQuote {
@@ -3085,6 +3091,16 @@ interface HotSectorUI {
   upCount: number;
   downCount: number;
   avgChangePercent: number;
+  // 2026-09-06（方案 A）：情绪周期 / 退潮识别 + 事件加持预留
+  phase?: 'early' | 'main' | 'climax' | 'retreat';
+  overheated?: boolean;
+  retreating?: boolean;
+  avgBias20?: number;
+  avgADX?: number;
+  avgSustain?: number;   // 板块近5日上涨占比（0-1，持续性确认）
+  avgMomentum20?: number; // 板块20日动量%（RS主轴）
+  limitUpCount?: number;  // 板块涨停家数（候选池内 changePercent≥9.9）
+  eventBoost?: number;
   heatScore: number;
   rank: number;
   isLeading: boolean;
@@ -3207,6 +3223,16 @@ function HotSectorSection() {
               <div className="flex items-center gap-2">
                 <span className="text-sm font-bold text-slate-100">🎯 {s.industry}</span>
                 {s.isLeading && <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-600/30 text-rose-300 border border-rose-500/40 font-semibold">本轮榜首</span>}
+                {/* 2026-09-06（方案 A）：板块生命周期阶段徽章 */}
+                {!s.phase ? null : s.phase === 'climax' || s.phase === 'retreat' ? (
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold ${s.phase === 'climax' ? 'bg-amber-900/40 text-amber-200 border-amber-700/50' : 'bg-emerald-900/40 text-emerald-200 border-emerald-700/50'}`}>
+                    {s.phase === 'climax' ? '⚠️ 高潮·已过热' : '📉 退潮·回调'}
+                  </span>
+                ) : (
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold ${s.phase === 'main' ? 'bg-emerald-900/40 text-emerald-200 border-emerald-700/50' : 'bg-sky-900/40 text-sky-200 border-sky-700/50'}`}>
+                    {s.phase === 'main' ? '📈 主升' : '🚀 启动'}
+                  </span>
+                )}
               </div>
               <span className={`text-xs font-bold px-2 py-0.5 rounded border ${heatColor(s.heatScore)}`}>
                 热度 {s.heatScore}
@@ -3218,8 +3244,24 @@ function HotSectorSection() {
                 涨幅 {pct(s.avgChangePercent)}
               </span>
               <span>上涨 {s.upCount}/{s.count}</span>
+              <span className="text-emerald-300" title="近5日上涨个股占比（热点持续性，过滤单日脉冲）">5日走强 {Math.round((s.avgSustain ?? 0) * 100)}%</span>
+              <span className="text-sky-300" title="板块20日动量（RS主轴，热点可持续的核心）">20日RS {(s.avgMomentum20 ?? 0).toFixed(1)}%</span>
+              {(s.limitUpCount ?? 0) > 0 && (
+                <span className="text-rose-300 font-semibold" title="涨停家数（板块内 changePercent≥9.9）">🚀涨停 {s.limitUpCount}</span>
+              )}
               <span className="text-slate-500">{s.count} 只成分</span>
             </div>
+            {/* 2026-09-06（方案 A）：过热/退潮风险提示（热度后回调内化） */}
+            {s.overheated && (
+              <div className="text-[10px] text-amber-300 bg-amber-900/15 border border-amber-800/40 rounded px-2 py-1 mb-2" title={s.avgBias20 !== undefined ? `板块平均 20日乖离 +${s.avgBias20.toFixed(1)}%，涨幅透支` : undefined}>
+                ⚠️ 已过热点：乖离 {s.avgBias20?.toFixed(1)}%，涨幅透支，谨慎追高
+              </div>
+            )}
+            {s.retreating && (
+              <div className="text-[10px] text-emerald-300 bg-emerald-900/15 border border-emerald-800/50 rounded px-2 py-1 mb-2" title={s.avgBias20 !== undefined ? `板块平均 20日乖离 ${s.avgBias20.toFixed(1)}%` : undefined}>
+                📉 退潮调整中，反弹确认前暂不优先
+              </div>
+            )}
             {/* 板块内优质股（第 2 层） */}
             <div className="space-y-1.5">
               {s.leaders.map((l, i) => (
@@ -3485,7 +3527,7 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
       // 3. 最新 date + 指定 period + 指定 scoreVersion
       //    旧数据无 scoreVersion 字段（id 无 _v1/_v2 后缀）→ 视为 v1（因子研究页默认 V1）
       const latestDate = [...new Set(allRecords.map(r => r.date))].sort().at(-1) || null;
-      const records = allRecords
+      const scoped = allRecords
         .filter(r => r.date === latestDate && r.period === selectedPeriod)
         .filter(r => {
           // 优先用显式 scoreVersion
@@ -3494,9 +3536,16 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
           }
           // 兼容旧数据：缺失 scoreVersion 的归到 v1
           return selectedVersion === 'v1';
-        })
-        .sort((a, b) => b.compositeScore - a.compositeScore)
-        .slice(0, 10);
+        });
+      // 2026-09-06：热点分级配额优先 —— 配额入选股按 quotaRank 排前（热度越高的板块占席越多），
+      // 其余股按综合分补足到 10；无配额数据的旧缓存退化为按综合分取 Top10
+      const quotaPicks = scoped
+        .filter(r => typeof r.quotaRank === 'number')
+        .sort((a, b) => (a.quotaRank ?? 0) - (b.quotaRank ?? 0));
+      const nonQuota = scoped
+        .filter(r => typeof r.quotaRank !== 'number')
+        .sort((a, b) => b.compositeScore - a.compositeScore);
+      const records = [...quotaPicks, ...nonQuota].slice(0, 10);
       setLastAnalysisDate(latestDate);
       // 计算缓存新鲜度
       if (records.length > 0) {
@@ -3531,6 +3580,12 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
           compositeScore: r.compositeScore,
           moneyFlowScore: r.moneyFlowScore, momentumScore: r.momentumScore,
           technicalScore: r.technicalScore,
+          // 2026-09-06：透传热点配额标签，供「板块配额」展示条 + 行内板块徽章
+          industry: r.industry || '',
+          quotaRank: r.quotaRank,
+          quotaSectorRank: r.quotaSectorRank,
+          quotaHeat: r.quotaHeat,
+          quotaSlots: r.quotaSlots,
           compositePct,
           // factorScores 是 JSON 字符串（v1 3-pillar 或 v2 8 大类），详情弹窗要用
           factorScores: r.factorScores,
@@ -3883,12 +3938,22 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
       setRunProgress('正在处理个股评分...');
       // v2 返回 results 数组，v1 返回 compositeScores
       let compositeScores: any[] = scoreVersion === 'v2'
-        ? (json.results || []).map((r: any) => {
+        ? (() => {
+          // 2026-09-06：热点分级配额推荐索引（code → 配额标签），用于给每只评分股打上板块配额信息
+          const recIndex = new Map<string, { rank: number; sectorRank: number; sectorHeat: number; quotaSlots: number }>((json.recommendations || []).map((p: any, i: number) => [p.code, { rank: i + 1, sectorRank: p.sectorRank ?? 0, sectorHeat: p.sectorHeat ?? 0, quotaSlots: p.quotaSlots ?? 0 }]));
+          return (json.results || []).map((r: any) => {
+            const rec = recIndex.get(r.code);
             // 候选池规模 + 权重来源（用于弹窗解释"为什么这个权重"）
             const d = json.diagnostics || {};
             const poolSize = (d.originalCount ?? r.rawFactors?._poolSize) || 0;
             return {
               code: r.code, name: r.name, price: r.price, changePercent: r.changePercent,
+              industry: r.industry || '',
+              // 热点分级配额标签（仅配额入选的 topN 有；否则 undefined）
+              quotaRank: rec?.rank,              // 配额位次（1..N）
+              quotaSectorRank: rec?.sectorRank,  // 板块热度名次
+              quotaHeat: rec?.sectorHeat,        // 板块热度 0-100
+              quotaSlots: rec?.quotaSlots,       // 该板块分到的名额
               compositeScore: r.composite,
               momentumScore: r.momentum, moneyFlowScore: r.moneyFlow, technicalScore: r.technical,
               // v2: 把 8 大类分数 + contributions + 原始因子值都存到 factorScores JSON，便于详情弹窗展示完整公式
@@ -3919,7 +3984,8 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
               }),
               regime: '-',
             };
-          })
+          });
+        })()
         : (json.compositeScores || []);
 
       // v2 降级重试：filterFlags=true 过滤后无候选时，自动去掉 flag 过滤重试一次
@@ -3943,25 +4009,37 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
             } catch { /* ignore */ }
           }
           const rd = retryJson.diagnostics || {};
-          compositeScores = (retryJson.results || []).map((r: any) => ({
-            code: r.code, name: r.name, price: r.price, changePercent: r.changePercent,
-            compositeScore: r.composite,
-            momentumScore: r.momentum, moneyFlowScore: r.moneyFlow, technicalScore: r.technical,
-            factorScores: JSON.stringify({
-              valuation: r.valuation, quality: r.quality, momentum: r.momentum,
-              reversal: r.reversal, moneyFlow: r.moneyFlow, technical: r.technical,
-              turnover: r.turnover, wqAlpha: r.wqAlpha,
-              contributions: r.contributions,
-              rawFactors: r.rawFactors,
-              percentiles: r.percentiles,
-              poolSize: rd.originalCount || 0,
-              weightsUsed: rd.weightsUsed,
-              weightSource: rd.weightSource,
-              icStats: rd.icStats,
-              icMode: useICHistory ? 'backtest' : 'snapshot',
-            }),
-            regime: '-',
-          }));
+          compositeScores = (() => {
+            // 2026-09-06：降级重试也带热点配额标签
+            const recIndex = new Map<string, { rank: number; sectorRank: number; sectorHeat: number; quotaSlots: number }>((retryJson.recommendations || []).map((p: any, i: number) => [p.code, { rank: i + 1, sectorRank: p.sectorRank ?? 0, sectorHeat: p.sectorHeat ?? 0, quotaSlots: p.quotaSlots ?? 0 }]));
+            return (retryJson.results || []).map((r: any) => {
+              const rec = recIndex.get(r.code);
+              return {
+                code: r.code, name: r.name, price: r.price, changePercent: r.changePercent,
+                industry: r.industry || '',
+                quotaRank: rec?.rank,
+                quotaSectorRank: rec?.sectorRank,
+                quotaHeat: rec?.sectorHeat,
+                quotaSlots: rec?.quotaSlots,
+                compositeScore: r.composite,
+                momentumScore: r.momentum, moneyFlowScore: r.moneyFlow, technicalScore: r.technical,
+                factorScores: JSON.stringify({
+                  valuation: r.valuation, quality: r.quality, momentum: r.momentum,
+                  reversal: r.reversal, moneyFlow: r.moneyFlow, technical: r.technical,
+                  turnover: r.turnover, wqAlpha: r.wqAlpha,
+                  contributions: r.contributions,
+                  rawFactors: r.rawFactors,
+                  percentiles: r.percentiles,
+                  poolSize: rd.originalCount || 0,
+                  weightsUsed: rd.weightsUsed,
+                  weightSource: rd.weightSource,
+                  icStats: rd.icStats,
+                  icMode: useICHistory ? 'backtest' : 'snapshot',
+                }),
+                regime: '-',
+              };
+            });
+          })();
         }
       }
 
@@ -4016,6 +4094,12 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
         name: s.name,
         price: s.price,
         changePercent: s.changePercent,
+        industry: s.industry || '',
+        // 2026-09-06：热点分级配额标签（仅配额入选股有；供今日推荐按配额顺序展示）
+        quotaRank: s.quotaRank || undefined,
+        quotaSectorRank: s.quotaSectorRank || undefined,
+        quotaHeat: s.quotaHeat || undefined,
+        quotaSlots: s.quotaSlots || undefined,
         compositeScore: s.compositeScore,
         momentumScore: s.momentumScore || 0,
         moneyFlowScore: s.moneyFlowScore || 0,
@@ -4538,6 +4622,7 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
               <span>行业集中度评估（Top {picks.length} 组合风险）</span>
               <span className="text-[10px] text-slate-400 font-normal">
                 · 评级 {lastConcentration.rating} / 分数 {lastConcentration.diversityScore} / HHI={lastConcentration.hhi.toFixed(3)}
+                <span className="text-slate-500"> · 评估对象：今日推荐配额 Top {picks.length}（向热点板块集中，分散度成本已计入）</span>
               </span>
             </div>
             <button
@@ -4944,6 +5029,34 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
           </p>
         </div>
       ) : (
+        <>
+        {(() => {
+          // 2026-09-06：🔥 热点板块配额分配条 —— 热度越高的板块占席越多
+          const sectorMap: Record<string, { industry: string; heat: number; slots: number; rank: number }> = {};
+          for (const p of picks) {
+            if (typeof p.quotaSectorRank !== 'number') continue;
+            const k = String(p.quotaSectorRank);
+            if (!sectorMap[k]) sectorMap[k] = { industry: p.industry || '', heat: p.quotaHeat || 0, slots: p.quotaSlots || 0, rank: p.quotaSectorRank };
+          }
+          const sectors = Object.values(sectorMap).sort((a, b) => a.rank - b.rank);
+          if (sectors.length > 0) {
+            const slotTotal = sectors.reduce((s, x) => s + x.slots, 0);
+            return (
+              <div className="flex items-center flex-wrap gap-2 mb-3 bg-slate-900/70 border border-amber-700/30 rounded-xl px-3 py-2">
+                <span className="text-[11px] font-medium text-amber-300">🔥 热点板块配额（{slotTotal}席 · ≤{sectors.length}板块，热度越高推越多）</span>
+                {sectors.map(s => (
+                  <span key={s.rank} className="flex items-center gap-1.5 text-[11px] px-2 py-0.5 rounded bg-slate-800 border border-slate-600/40">
+                    <span className="font-bold text-amber-200">#{s.rank}</span>
+                    <span className="text-slate-200">{s.industry}</span>
+                    <span className="text-[10px] text-slate-400">热度{s.heat}分</span>
+                    <span className="text-[10px] px-1 rounded bg-rose-600/30 text-rose-200">×{s.slots}席</span>
+                  </span>
+                ))}
+              </div>
+            );
+          }
+          return null;
+        })()}
         <StockTable
           rows={picks.map(p => toStockRow(p))}
           variant="lite"
@@ -4958,6 +5071,11 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
           defaultSortBy="compositeScore"
           defaultSortDir="desc"
           historyHits={historyHits}
+          sectorTags={Object.fromEntries(
+            picks
+              .filter(p => typeof p.quotaSectorRank === 'number')
+              .map(p => [p.code, { industry: p.industry || '', rank: p.quotaSectorRank!, heat: p.quotaHeat || 0 }] as const)
+          )}
           onRowClick={(row) => onShowDetail({ code: row.code, name: row.name })}
           onScoreClick={(row) => {
             // 从 picks 里查回原始 factorScores（StockTable 传回的 row 不含此字段）
@@ -4983,6 +5101,7 @@ function TodayRecommendations({ onAddToSimulator, onShowDetail, onShowScoreDetai
             });
           }}
         />
+        </>
       )}
     </section>
   );

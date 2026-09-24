@@ -93,5 +93,6 @@ tests/generation/*.eval.result.md
 
 # ---- OpenMAIC/quant 加的 ----
 dev.db
+*.db
 .hermes/
 *.bak

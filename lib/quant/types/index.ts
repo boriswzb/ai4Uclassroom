@@ -50,6 +50,8 @@ export interface Order {
   filledVolume: number;// 已成交数量
   status: OrderStatus;
   timestamp: number;
+  // 2026-09-06：风控/失败原因（拒绝时写入，前端显示，避免"未知错误"吞掉真实原因）
+  reason?: string;
 }
 
 /** 持仓 */
@@ -69,6 +71,7 @@ export interface Account {
   frozen: number;      // 冻结资金
   totalAssets: number; // 总资产
   totalPnL: number;    // 总盈亏
+  initialCash: number; // 初始资金（用于收益率计算）
   positions: Position[];
 }
 

@@ -13,11 +13,10 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { simulatorStateStore } from '@/lib/quant/store/simulator-state-store';
-import { checkInviteCookie } from '@/lib/server/invite-codes';
+import { checkInviteCookie, getServerUserId } from '@/lib/server/invite-codes';
 
 export async function GET(req: NextRequest) {
-  const user = await checkInviteCookie();
-  const userId = user.invited ? user.username : `guest_${user.username || 'anonymous'}`;
+  const { userId } = await getServerUserId();
 
   // 防止越权：只允许查自己的（从前端 query 拿到的 userId 必须和 cookie 一致）
   const { searchParams } = new URL(req.url);
@@ -50,8 +49,7 @@ export async function GET(req: NextRequest) {
  */
 export async function POST(req: NextRequest) {
   // POST /api/quant/simulator-state 触发导出
-  const user = await checkInviteCookie();
-  const userId = user.invited ? user.username : `guest_${user.username || 'anonymous'}`;
+  const { userId } = await getServerUserId();
 
   const state = await simulatorStateStore.load(userId);
   if (!state) {
@@ -84,8 +82,7 @@ export async function POST(req: NextRequest) {
  * - 安全：必须带 cookie，且 userId 必须与 cookie 一致
  */
 export async function PUT(req: NextRequest) {
-  const user = await checkInviteCookie();
-  const userId = user.invited ? user.username : `guest_${user.username || 'anonymous'}`;
+  const { userId } = await getServerUserId();
 
   let body: { state?: any; mergeStrategy?: 'overwrite' | 'merge' };
   try {

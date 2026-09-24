@@ -297,6 +297,12 @@ export interface DbStockScore {
   factorScores: string;             // JSON string of Record<string, number>
   regime: string;
   updatedAt: number;
+  // 2026-09-06：热点分级配额标签（今日推荐 Top10 来自最多 4 个热点板块，热度越高占席越多）
+  industry?: string;            // 申万一级行业
+  quotaRank?: number;           // 配额位次（1..N，越小越靠前）
+  quotaSectorRank?: number;     // 板块热度名次（1 起，越小越热）
+  quotaHeat?: number;           // 板块热度 0-100
+  quotaSlots?: number;          // 该板块本次分到的推荐名额
 }
 
 // ==================== 股票数据缓存 ====================

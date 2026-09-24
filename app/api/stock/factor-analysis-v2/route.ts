@@ -34,8 +34,10 @@ import {
   optimizePortfolio,
   computeHotSectors,
   applySectorBoost,
+  buildHotQuotaPicks,
   type V2ScoreOptions,
 } from '@/lib/quant/factor/v2';
+import { fetchSectorBoardMarket } from '@/lib/quant/factor/v2/sector-market';
 
 // ── HTTP 工具（同 v1） ─────────────────────────────
 function httpGetRaw(url: string, timeout = 15000): Promise<Buffer> {
@@ -522,7 +524,7 @@ export async function GET(request: NextRequest) {
     //    池只有 240 只，截面样本小，百分位/IC/行业中性化统计意义不足。
     //    设统计下限 V2_POOL_MIN（500 只 = 业界最低统计显著），上限防 OOM。
     const V2_POOL_MIN = 500;
-    const V2_POOL_MAX = 600;   // OOM 硬上限（500 只 × 100 根 = 50k KBar，4GB 堆安全）
+    const V2_POOL_MAX = 750;   // 2026-09-06 扩池：750 只改善热点板块行业样本（每行业 4-8 只），dev OOM 安全上限
     const targetCodes = codes.slice(0, Math.min(Math.max(limit * 3, V2_POOL_MIN), V2_POOL_MAX));
     const klines = await getKlinesBatch(targetCodes, 100);
 
@@ -682,18 +684,35 @@ export async function GET(request: NextRequest) {
     //   第 1 层：在 v2 候选池内按申万一级行业聚合,算板块热度（涨幅+资金+上涨占比百分位）
     //   第 2 层：给属于热点板块的股票加板块热度分（克制权重 15%），让热点板块优质股自然靠前
     //   响应返回 hotSectors（含板块内 top 股,可一键推交易池），实现"热点模块多推荐一点"
-    const hotRaw = computeHotSectors(v2Out.results);
+    // 2026-09-06（B 方案）：拉全市场板块行情（push2 被墙/失败自动降级回候选池聚合）
+    //   当日涨幅/上涨占比用全市场行业板块口径（每板块几十上百只成分），不再受候选池子样本限制
+    const sectorMarket = await fetchSectorBoardMarket();
+    const marketCfg = sectorMarket
+      ? new Map(Array.from(sectorMarket.entries()).map(([name, q]) => [name, { pct: q.pct, upCount: q.upCount, downCount: q.downCount }]))
+      : undefined;
+    const sectorOpts = marketCfg ? { market: marketCfg } : {};
+    const hotRaw = computeHotSectors(v2Out.results, sectorOpts);
     const boostedResults = applySectorBoost(v2Out.results, hotRaw);
-    const hotSectors = computeHotSectors(boostedResults);
+    const hotSectors = computeHotSectors(boostedResults, sectorOpts);
     // 用 boost 后综合分重新排序取 topN（热点板块股因此在推荐区挤进前排）
     const topResults = [...boostedResults]
       .sort((a, b) => (b.composite ?? 0) - (a.composite ?? 0))
       .slice(0, limit);
 
+    // 7.11 热点板块分级配额（方案 A，2026-09-06）
+    //   今日推荐 = 10 支，最多横跨 4 个热点板块；名额按各板块热度比例分配
+    //   热度最高的板块推荐数量最多（硬性配额，不再是软性加分）
+    //   返回 recommendations（配额优先 top10）+ quotaSummary（板块配额明细，前端展示）
+    const quota = buildHotQuotaPicks(boostedResults, hotSectors, { pickN: 10, maxSectors: 4, maxSlotsPerSector: 4 });
+
     // 7.6 行业集中度评估（v2.1.1 新增 — 2026-06-15）
     //   目的：Top N 推荐作为组合的分散度（HHI + 行业偏离）
     //   业界意义：避免"10 只票全是银行/白酒"的集中风险
-    const concentration = computeConcentration(topResults, v2Out.results);
+    // 方案 C（2026-09-06）：评估对象从"Top 80 全池"改为"最终配额推荐的 10 支"——口径与界面展示一致，
+    //   让「集中度 A+」真实反映"往热点板块集中换来的分散度成本"（而非评估一批用户根本没看到的 80 支）。
+    const quotaCodes = new Set(quota.picks.map(p => p.code));
+    const quotaRecommendResults = boostedResults.filter(r => quotaCodes.has(r.code));
+    const concentration = computeConcentration(quotaRecommendResults, v2Out.results);
 
     const response = {
       success: true,
@@ -702,6 +721,9 @@ export async function GET(request: NextRequest) {
       count: candidates.length,
       results: topResults,
       hotSectors,  // 2026-09：热点板块（板块热度 + 板块内 top 股），前端热点区直接消费
+      // 2026-09-06：热点板块分级配额 —— 今日推荐 = pickN 支、最多 maxSectors 个板块，热度越高推越多
+      recommendations: quota.picks,   // 配额优先的推荐序列（含 sectorRank/heat/quotaSlots 标签）
+      quotaSummary: quota.summary,     // 板块配额明细（前端展示“电子×3 · 计算机×2 ·...”）
       diagnostics: { ...v2Out.diagnostics, icStats },
       concentration,  // v2.1.1：行业集中度评估
       timestamp: Date.now(),

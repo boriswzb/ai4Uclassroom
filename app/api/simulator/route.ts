@@ -6,7 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { liveSimulator } from '@/lib/quant/simulator/live-simulator';
 import { simulatorPersistence } from '@/lib/quant/store/simulator-persistence';
-import { checkInviteCookie } from '@/lib/server/invite-codes';
+import { checkInviteCookie, getServerUserId } from '@/lib/server/invite-codes';
 import {
   MACDStrategy, KDJStrategy, MAStrategy,
   BollingerStrategy, RSIStrategy
@@ -31,8 +31,7 @@ import type { Direction } from '@/lib/quant/types';
 export async function GET() {
   try {
     // 按当前用户身份恢复对应的账户
-    const user = await checkInviteCookie();
-    const userId = user.invited ? user.username : `guest_${user.username || 'anonymous'}`;
+    const { userId } = await getServerUserId();
 
     const restoreResult = await simulatorPersistence.restore(userId);
 
@@ -76,7 +75,7 @@ export async function GET() {
         account,
         orders,
         userId,
-        isInviteUser: user.invited,
+        isInviteUser: (await checkInviteCookie()).invited,
         tradingCodes,
         strategiesCount,
       }
@@ -102,8 +101,8 @@ export async function POST(req: NextRequest) {
 
     // 辅助：解析当前 userId
     const resolveUserId = async (): Promise<string> => {
-      const u = await checkInviteCookie();
-      return u.invited ? u.username : `guest_${u.username || 'anonymous'}`;
+      const { userId } = await getServerUserId();
+      return userId;
     };
 
     switch (action) {
@@ -128,14 +127,23 @@ export async function POST(req: NextRequest) {
         }
 
         // 获取用户身份并创建/查找账户
-        const user = await checkInviteCookie();
-        const userId = user.invited ? user.username : `guest_${user.username || 'anonymous'}`;
-        const cash = initialCash || 1000000;
+        const { userId } = await getServerUserId();
+        let cash = initialCash || 1000000;
+
+        // ⭐ 合并自 quant-v3 38e3d9a：账户已有持仓时保留现金（防止资金被重置/现金腐蚀）
+        const { simulatorStateStore } = await import('@/lib/quant/store/simulator-state-store');
+        const existingState = await simulatorStateStore.load(userId);
+        if (existingState?.account && existingState.positions.length > 0) {
+          cash = existingState.account.cash ?? cash;
+          console.log(`[simulator start] 账户已有 ${existingState.positions.length} 只持仓，保留现金 ¥${cash.toFixed(2)}`);
+        }
 
         // 查找或创建账户（浏览器侧写入 IndexedDB，Node.js 静默跳过）
         const accountId = await simulatorPersistence.findOrCreateAccount(userId, cash);
         if (accountId) {
-          await simulatorPersistence.updateAccountCash(accountId, cash, 0, cash, 0);
+          const totalAssets = existingState?.account?.totalAssets ?? cash;
+          const totalPnL = existingState?.account?.totalPnL ?? 0;
+          await simulatorPersistence.updateAccountCash(accountId, cash, 0, totalAssets, totalPnL);
         }
 
         liveSimulator.reset(cash);
@@ -177,13 +185,22 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ success: false, error: '最多10支' }, { status: 400 });
         }
 
-        const user = await checkInviteCookie();
-        const userId = user.invited ? user.username : `guest_${user.username || 'anonymous'}`;
-        const cash = initialCash || 1000000;
+        const { userId } = await getServerUserId();
+        let cash = initialCash || 1000000;
+
+        // ⭐ 合并自 quant-v3 38e3d9a：账户已有持仓时保留现金（防止资金被重置/现金腐蚀）
+        const { simulatorStateStore } = await import('@/lib/quant/store/simulator-state-store');
+        const existingState = await simulatorStateStore.load(userId);
+        if (existingState?.account && existingState.positions.length > 0) {
+          cash = existingState.account.cash ?? cash;
+          console.log(`[simulator startEnsemble] 账户已有 ${existingState.positions.length} 只持仓，保留现金 ¥${cash.toFixed(2)}`);
+        }
 
         const accountId = await simulatorPersistence.findOrCreateAccount(userId, cash);
         if (accountId) {
-          await simulatorPersistence.updateAccountCash(accountId, cash, 0, cash, 0);
+          const totalAssets = existingState?.account?.totalAssets ?? cash;
+          const totalPnL = existingState?.account?.totalPnL ?? 0;
+          await simulatorPersistence.updateAccountCash(accountId, cash, 0, totalAssets, totalPnL);
         }
 
         liveSimulator.reset(cash);
@@ -245,8 +262,7 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ success: false, error: '请传入 codes' }, { status: 400 });
         }
 
-        const user = await checkInviteCookie();
-        const userId = user.invited ? user.username : `guest_${user.username || 'anonymous'}`;
+        const { userId } = await getServerUserId();
         const accountId = liveSimulator.getAccountId()
           || await simulatorPersistence.findOrCreateAccount(userId, liveSimulator.getAccount().cash);
         liveSimulator.setAccountId(accountId);
@@ -306,8 +322,7 @@ export async function POST(req: NextRequest) {
 
       // ── 重置 ──
       case 'reset': {
-        const user = await checkInviteCookie();
-        const userId = user.invited ? user.username : `guest_${user.username || 'anonymous'}`;
+        const { userId } = await getServerUserId();
         const cash = params.initialCash || 1000000;
 
         const accountId = await simulatorPersistence.findOrCreateAccount(userId, cash);

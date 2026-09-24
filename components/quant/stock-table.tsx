@@ -66,6 +66,8 @@ interface StockTableProps {
   /** 「历史命中」统计：code -> { count(过去 5 个交易日 Top N 命中次数), avgRank, lastDate }
    *  显示在股票名旁边的 🔥 徽章，给用户"推荐稳定性"信号 */
   historyHits?: Record<string, { count: number; avgRank: number; lastDate: string | null }>;
+  /** 2026-09-06：热点板块配额标签 code -> { industry, rank, heat }；有则在该行名字旁显示板块徽章（可选，不传不影响其它页） */
+  sectorTags?: Record<string, { industry: string; rank: number; heat: number }>;
 }
 
 /** 可排序列 */
@@ -134,6 +136,7 @@ export function StockTable({
   defaultSortBy,
   defaultSortDir = 'desc',
   historyHits,
+  sectorTags,
 }: StockTableProps) {
   // 全选状态（lite 用）
   const allCodes = rows.map(r => r.code);
@@ -206,6 +209,8 @@ export function StockTable({
     // 历史命中：过去 5 个交易日 Top N 出现次数
     const hit = historyHits?.[row.code];
     const isHot = hit && hit.count >= 3; // 连续 3 天以上 → 热门
+    // 2026-09-06：热点板块配额标签（该行来自哪个热点板块）
+    const sectorTag = sectorTags?.[row.code];
     // lite 模式：onRowClick 触发查看 K 线详情（仅在股票名 cell 点）
     // pro 模式：整行 onClick 已接管，这里只显示
     const canClickName = variant === 'lite' && onRowClick;
@@ -238,6 +243,14 @@ export function StockTable({
           </div>
           <div className={`text-xs text-slate-500 ${variant === 'pro' ? 'font-mono' : ''}`}>{row.code}</div>
         </div>
+        {variant === 'lite' && sectorTag && (
+          <span
+            className="text-[10px] px-1.5 py-0.5 bg-amber-900/40 text-amber-200 border border-amber-700/40 rounded shrink-0"
+            title={sectorTag.industry ? `热点板块 #${sectorTag.rank} ${sectorTag.industry}（热度${sectorTag.heat}分）` : `热点板块 #${sectorTag.rank}`}
+          >
+            {sectorTag.industry || '热点'}#{sectorTag.rank}
+          </span>
+        )}
         {watched && (
           <span className="text-[10px] px-1.5 py-0.5 bg-cyan-900/40 text-cyan-300 border border-cyan-700/50 rounded" title="已在自选股">
             📡 盯盘

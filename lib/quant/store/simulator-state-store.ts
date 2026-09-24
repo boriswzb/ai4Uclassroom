@@ -82,6 +82,7 @@ export interface SimulatorState {
     frozen: number;
     totalAssets: number;
     totalPnL: number;
+    initialCash: number;
   };
   positions: PersistedPosition[];
   orders: PersistedOrder[];            // 最近 100 条

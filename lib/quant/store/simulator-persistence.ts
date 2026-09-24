@@ -77,6 +77,7 @@ function snapshotSimulator(userId: string): SimulatorState {
       frozen: account.frozen,
       totalAssets: account.totalAssets,
       totalPnL: account.totalPnL,
+      initialCash: account.initialCash || 1000000,
     },
     positions: positions.map((p: any) => ({
       code: p.code,
@@ -111,6 +112,7 @@ function applyState(state: SimulatorState): void {
     frozen: state.account.frozen,
     totalAssets: state.account.totalAssets,
     totalPnL: state.account.totalPnL,
+    initialCash: state.account.initialCash,
     positions: [],
   };
 
@@ -273,6 +275,7 @@ class SimulatorPersistence {
     liveSimulator['account'] = {
       cash: account.currentCash, frozen: account.frozen,
       totalAssets: account.totalAssets, totalPnL: account.totalPnL,
+      initialCash: account.initialCash,
       positions: [],
     };
 
@@ -484,7 +487,7 @@ class SimulatorPersistence {
       if (userId) {
         const state = await simulatorStateStore.load(userId) || snapshotSimulator(userId);
         state.userId = userId;
-        state.account = { cash, frozen, totalAssets, totalPnL };
+        state.account = { cash, frozen, totalAssets, totalPnL, initialCash: state.account?.initialCash || 1000000 };
         await simulatorStateStore.save(state);
       }
       return;

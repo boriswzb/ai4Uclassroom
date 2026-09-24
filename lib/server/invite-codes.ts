@@ -171,6 +171,41 @@ export async function checkInviteCookie(): Promise<{
 }
 
 /**
+ * Get the current user identifier for server-side data isolation.
+ *
+ * 受邀用户：username（稳定，跨设备）
+ * 游客：openmaic_guest_id cookie（由 middleware 派发，每个浏览器独立）
+ *
+ * @returns { userId, invited, username }
+ *   - invited=true 时 userId = username
+ *   - invited=false 时 userId = `guest_<guestId>`（每个浏览器独立）
+ */
+export async function getServerUserId(): Promise<{
+  userId: string;
+  invited: boolean;
+  username: string;
+}> {
+  const invite = await checkInviteCookie();
+  if (invite.invited && invite.username) {
+    return { userId: invite.username, invited: true, username: invite.username };
+  }
+
+  // 游客：从 openmaic_guest_id cookie 取（middleware 保证一定有）
+  try {
+    const cookieStore = await cookies();
+    const guestId = cookieStore.get('openmaic_guest_id')?.value;
+    if (guestId) {
+      return { userId: `guest_${guestId}`, invited: false, username: '' };
+    }
+  } catch {
+    /* ignore */
+  }
+
+  // 兜底：万一 cookie 丢失，返回固定 anonymous（仅极端边界情况）
+  return { userId: 'guest_anonymous', invited: false, username: '' };
+}
+
+/**
  * Verify token payload (timestamp.username[.apiKey.baseUrl].signature).
  * Returns credentials for per-user logins.
  */

@@ -107,6 +107,10 @@ export class LiveSimulator {
 
   /** 当日是否已写入净值（YYYYMMDD 字符串），避免重复 */
   private lastEquityRecordedDay: string | null = null;
+  // 日亏损限制的「当日起始权益」每个交易日重置一次（跨天检测用）。否则 dailyStartEquity
+  // 只会在 reset() 时设置，导致 daily_loss_limit 变成「生命周期累计亏损」而非「当日亏损」，
+  // 同样会锁死新买入。
+  private lastDailyResetDay: string | null = null;
 
   // Phase 1: 历史K线缓存（用于高级止损和市场状态分析）
   private kbarsCache: Map<string, KBar[]> = new Map();
@@ -133,6 +137,7 @@ export class LiveSimulator {
       frozen: 0,
       totalAssets: initialCash,
       totalPnL: 0,
+      initialCash,
       positions: []
     };
 
@@ -363,6 +368,14 @@ export class LiveSimulator {
     // 北京时间今天的 0 点（毫秒时间戳）
     const startOfDay = beijing.getTime() - (hour * 60 + minute) * 60 * 1000;
     const endOfDay = beijing.getTime();
+
+    // ⭐ 日亏损限制每日重置：每个交易日首个 tick 用上一日收盘资产作为「当日起始权益」。
+    //   这样 daily_loss_limit 只衡量「今天」的亏损，历史累计/当前浮亏不再锁死新买入。
+    if (this.lastDailyResetDay !== todayStr) {
+      this.riskEngine.resetDaily();
+      this.lastDailyResetDay = todayStr;
+      this.log('info', `🔄 日亏损限制已重置（${todayStr}）`);
+    }
 
     for (const code of this.tradingCodes) {
       try {
@@ -682,6 +695,7 @@ export class LiveSimulator {
     const riskResult = this.riskEngine.checkOrder(order, limitPrice || 0);
     if (!riskResult.allowed) {
       order.status = 'rejected';
+      order.reason = riskResult.reason;
       this.log('warn', `订单被风控拒绝: ${riskResult.reason}`);
       return order;
     }
@@ -700,9 +714,17 @@ export class LiveSimulator {
   private async fillOrder(order: Order): Promise<Order> {
     let currentPrice = this.getCurrentPrice(order.code);
 
-    // P1-A+ 修复：如果缓存和 K 线都没有（如手动下单时引擎刚启动），直接拉一次实时报价
-    // 根因：getCurrentPrice 终极 fallback 返回 0，导致 order.price=0，position.avgCost=0
-    if (currentPrice <= 0) {
+    // ⚠️ 2026-09-24 成交价强优先实时价：绝不能用 kbarsCache 历史 close / 旧缓存作为成交价。
+    //   根因：批量等额买入时 getCurrentPrice 从 kbarsCache 返回了前复权历史 close（90天前），
+    //   与之后 refreshHoldingPrices 用的实时原始价不在同一价格体系 → avgCost 失真，
+    //   今天刚买入的股票本应盈亏=0，却显示成 ±300% / -70%（如 300684 avgCost=27 vs 实时=118）。
+    //   统一成交价与持仓刷新的价格来源（实时原始价），avgCost 才正确、盈亏% 才可信。
+    const realtime = await this.fetchRealtimeQuoteDirect(order.code);
+    if (realtime !== null && realtime > 0) {
+      currentPrice = realtime;
+      this.realtimeCache.set(order.code, { price: realtime, timestamp: Date.now() });
+    } else if (currentPrice <= 0) {
+      // 实时失败且无缓存：原兜底逻辑拉一次实时报价
       try {
         const quotes = await dataSourceManager.getRealtimeQuote([order.code]);
         if (quotes && quotes.length > 0 && quotes[0].price > 0) {
@@ -728,6 +750,9 @@ export class LiveSimulator {
     } else {
       const pnl = this.positionManager.closePosition(order.code, order.volume, currentPrice);
       this.account.totalPnL += pnl;
+      // ⭐ 资金计算修复（合并自 quant-v3 38e3d9a）：卖出金额必须加回现金，
+      //   否则 cash 只减不增 → totalAssets 虚高/虚低、浮动盈亏失真
+      this.account.cash += order.volume * currentPrice;
       const profit = pnl >= 0 ? `+¥${pnl.toFixed(2)}` : `-¥${Math.abs(pnl).toFixed(2)}`;
       this.log('trade', `卖出 ${order.code} × ${order.volume}股 @ ¥${currentPrice.toFixed(2)} → ${profit}`);
     }
@@ -760,6 +785,7 @@ export class LiveSimulator {
         const riskResult = this.riskEngine.checkOrder(entry.order, currentPrice);
         if (!riskResult.allowed) {
           entry.order.status = 'rejected';
+          entry.order.reason = riskResult.reason;
           entry.reject(new Error(`Risk check failed after trigger: ${riskResult.reason}`));
           this.log('warn', `限价单触发后被风控拦截: ${entry.order.code} ${riskResult.reason}`);
         } else {
@@ -804,7 +830,7 @@ export class LiveSimulator {
             code,
             name: (position as any).name || code,
             type: 'risk_rule',
-            reason: result.reason || '风控规则触发',
+            reason: (result as any).reason || '风控规则触发',
             price: priceForRisk,
             pnl: (priceForRisk - position.avgCost) * position.volume,
             timestamp: Date.now(),
@@ -908,6 +934,10 @@ export class LiveSimulator {
           updated++;
         }
       }
+    }
+    // 合并自 quant-v3 38e3d9a：价格更新后重算账户（totalAssets/positions 同步）
+    if (updated > 0) {
+      this.updateAccount();
     }
     return updated;
   }
@@ -1065,6 +1095,7 @@ export class LiveSimulator {
     this.currentRegime = 'uncertain';
     this.advancedStopManager.clearAll();
     this.lastEquityRecordedDay = null;
+    this.lastDailyResetDay = null; // 重置后日亏损起始权益也要重新以新账户初始化
 
     const cash = initialCash || 1000000;
     this.account = {
@@ -1072,6 +1103,7 @@ export class LiveSimulator {
       frozen: 0,
       totalAssets: cash,
       totalPnL: 0,
+      initialCash: cash,
       positions: []
     };
 
